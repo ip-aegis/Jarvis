@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Cisco Magnetic / Meraki Style Base */
+:root {
+  --color-primary: #00bceb;
+  --color-bg: #1a1a2e;
+  --color-surface: #252542;
+  --color-text: #ffffff;
+  --color-text-muted: #a0a0b0;
+}
+
+body {
+  @apply bg-surface-800 text-white antialiased;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-surface-800;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-surface-500 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-surface-400;
+}
+
+/* Custom utilities */
+@layer utilities {
+  .magnetic-card {
+    @apply bg-surface-700 rounded-magnetic p-4 border border-surface-600;
+  }
+
+  .magnetic-button {
+    @apply px-4 py-2 rounded-magnetic font-medium transition-all duration-200;
+  }
+
+  .magnetic-button-primary {
+    @apply magnetic-button bg-primary text-white hover:bg-primary-600;
+  }
+
+  .magnetic-button-secondary {
+    @apply magnetic-button bg-surface-600 text-white hover:bg-surface-500;
+  }
+
+  .magnetic-input {
+    @apply w-full px-3 py-2 bg-surface-800 border border-surface-600 rounded-magnetic
+           text-white placeholder-surface-300
+           focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary;
+  }
+}
