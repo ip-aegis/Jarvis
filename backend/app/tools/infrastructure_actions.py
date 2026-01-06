@@ -2,12 +2,18 @@
 LLM tools for infrastructure management actions.
 These tools can modify system state and may require confirmation.
 """
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from app.core.action_types import ActionCategory, ActionType
 from app.database import SessionLocal
 from app.models import NetworkDevice, Server
-from app.services.actions import ActionDefinition, action_registry
 from app.services.ssh import SSHService
-from app.tools.base import ActionCategory, ActionTool, ActionType, tool_registry
+from app.tools.base import ActionTool, tool_registry
+
+if TYPE_CHECKING:
+    from app.services.actions import ActionDefinition
 
 # =============================================================================
 # Server Actions
@@ -457,42 +463,48 @@ tool_registry.register(set_port_state_tool)
 tool_registry.register(set_port_vlan_tool)
 tool_registry.register(reboot_server_tool)
 
-# Also register with action_registry for the action service
-action_registry.register(
-    ActionDefinition(
-        name="restart_service",
-        description="Restart a systemd service on a managed server",
-        handler=restart_service_handler,
-        action_type=ActionType.WRITE,
-        category=ActionCategory.SERVICE,
-        requires_confirmation=True,
-        confirmation_message="This will restart {service_name}, causing brief service interruption. Confirm?",
-        target_type="server",
-    )
-)
+def register_infrastructure_actions():
+    """Register infrastructure actions with the action service.
 
-action_registry.register(
-    ActionDefinition(
-        name="reboot_server",
-        description="Reboot a managed server",
-        handler=reboot_server_handler,
-        action_type=ActionType.DESTRUCTIVE,
-        category=ActionCategory.SERVER,
-        requires_confirmation=True,
-        confirmation_message="This will reboot the server, causing several minutes of downtime. Confirm?",
-        target_type="server",
-    )
-)
+    This is called lazily to avoid circular imports.
+    """
+    from app.services.actions import ActionDefinition, action_registry
 
-action_registry.register(
-    ActionDefinition(
-        name="set_port_state",
-        description="Enable or disable a switch port",
-        handler=set_port_state_handler,
-        action_type=ActionType.WRITE,
-        category=ActionCategory.NETWORK,
-        requires_confirmation=True,
-        confirmation_message="This will change the port state, affecting network connectivity. Confirm?",
-        target_type="network_device",
+    action_registry.register(
+        ActionDefinition(
+            name="restart_service",
+            description="Restart a systemd service on a managed server",
+            handler=restart_service_handler,
+            action_type=ActionType.WRITE,
+            category=ActionCategory.SERVICE,
+            requires_confirmation=True,
+            confirmation_message="This will restart {service_name}, causing brief service interruption. Confirm?",
+            target_type="server",
+        )
     )
-)
+
+    action_registry.register(
+        ActionDefinition(
+            name="reboot_server",
+            description="Reboot a managed server",
+            handler=reboot_server_handler,
+            action_type=ActionType.DESTRUCTIVE,
+            category=ActionCategory.SERVER,
+            requires_confirmation=True,
+            confirmation_message="This will reboot the server, causing several minutes of downtime. Confirm?",
+            target_type="server",
+        )
+    )
+
+    action_registry.register(
+        ActionDefinition(
+            name="set_port_state",
+            description="Enable or disable a switch port",
+            handler=set_port_state_handler,
+            action_type=ActionType.WRITE,
+            category=ActionCategory.NETWORK,
+            requires_confirmation=True,
+            confirmation_message="This will change the port state, affecting network connectivity. Confirm?",
+            target_type="network_device",
+        )
+    )

@@ -1,28 +1,8 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Optional
 
-
-class ActionType(str, Enum):
-    """Classification of action risk level."""
-
-    READ = "read"  # Safe, read-only queries
-    WRITE = "write"  # Modifies state but generally reversible
-    DESTRUCTIVE = "destructive"  # Potentially dangerous, may be irreversible
-
-
-class ActionCategory(str, Enum):
-    """Category of infrastructure being acted upon."""
-
-    SERVER = "server"
-    NETWORK = "network"
-    FIREWALL = "firewall"
-    SERVICE = "service"
-    MONITORING = "monitoring"
-    PROJECT = "project"
-    SEARCH = "search"
-    SYSTEM = "system"
+from app.core.action_types import ActionCategory, ActionType
 
 
 @dataclass

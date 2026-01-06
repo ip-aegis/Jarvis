@@ -9,9 +9,9 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.action_types import ActionCategory, ActionType
 from app.core.logging import get_logger
 from app.models import ActionAudit, PendingConfirmation
-from app.tools.base import ActionCategory, ActionType
 
 logger = get_logger(__name__)
 

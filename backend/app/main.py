@@ -47,6 +47,15 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("database_initialized")
 
+    # Register infrastructure actions (done here to avoid circular imports)
+    try:
+        from app.tools.infrastructure_actions import register_infrastructure_actions
+
+        register_infrastructure_actions()
+        logger.info("infrastructure_actions_registered")
+    except Exception as e:
+        logger.warning("infrastructure_actions_registration_failed", error=str(e))
+
     # Start home automation background tasks
     try:
         from app.services.home.background_tasks import start_background_tasks, stop_background_tasks

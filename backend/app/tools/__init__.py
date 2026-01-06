@@ -17,6 +17,7 @@ from app.tools.infrastructure_actions import (
     execute_command_tool,
     get_service_status_tool,
     reboot_server_tool,
+    register_infrastructure_actions,
     restart_service_tool,
     set_port_state_tool,
     set_port_vlan_tool,
@@ -67,6 +68,9 @@ register_journal_tools()
 
 # Register work tools
 register_work_tools()
+
+# Note: register_infrastructure_actions() is called from main.py startup
+# to avoid circular import issues
 
 # Export for easy access
 __all__ = [
