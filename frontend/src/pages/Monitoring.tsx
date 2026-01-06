@@ -65,10 +65,18 @@ export default function Monitoring() {
   })
 
   useEffect(() => {
-    fetchMetrics()
-    const interval = setInterval(fetchMetrics, 30000) // Refresh every 30s
-    return () => clearInterval(interval)
-  }, [])
+    fetchMetrics() // Initial fetch
+
+    // Only poll if WebSocket is disconnected
+    let interval: NodeJS.Timeout | null = null
+    if (!connected) {
+      interval = setInterval(fetchMetrics, 30000) // Refresh every 30s when disconnected
+    }
+
+    return () => {
+      if (interval) clearInterval(interval)
+    }
+  }, [connected]) // Re-run when connection status changes
 
   const fetchMetrics = async () => {
     try {
@@ -114,9 +122,18 @@ export default function Monitoring() {
               className={`flex items-center gap-1 text-xs px-2 py-1 rounded-full ${
                 connected ? 'bg-success/20 text-success' : 'bg-error/20 text-error'
               }`}
+              role="status"
+              aria-live="polite"
             >
-              {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              {connected ? 'Live' : 'Disconnected'}
+              {connected ? (
+                <Wifi className="w-3 h-3" aria-hidden="true" />
+              ) : (
+                <WifiOff className="w-3 h-3" aria-hidden="true" />
+              )}
+              <span>{connected ? 'Live' : 'Disconnected'}</span>
+              <span className="sr-only">
+                {connected ? 'Real-time updates active' : 'Connection lost, polling for updates'}
+              </span>
             </span>
           </div>
         </div>
@@ -205,9 +222,15 @@ export default function Monitoring() {
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       {server.status === 'online' ? (
-                        <Wifi className="w-4 h-4 text-success" />
+                        <>
+                          <Wifi className="w-4 h-4 text-success" aria-hidden="true" />
+                          <span className="sr-only">Online</span>
+                        </>
                       ) : (
-                        <WifiOff className="w-4 h-4 text-error" />
+                        <>
+                          <WifiOff className="w-4 h-4 text-error" aria-hidden="true" />
+                          <span className="sr-only">Offline</span>
+                        </>
                       )}
                       <span className="font-medium text-white">{server.hostname}</span>
                       <span className="text-xs text-surface-400">{server.ip_address}</span>

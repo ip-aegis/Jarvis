@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { X, Check, Loader2, Server, Key, Download, Search, Bot } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import type { Server as ServerType, OnboardingResult } from '../../types'
 
 interface OnboardingWizardProps {
   onClose: () => void
-  onComplete: (server: any) => void
+  onComplete: (server: ServerType) => void
 }
 
 type Step = 'credentials' | 'connecting' | 'keys' | 'agent' | 'review' | 'complete'
@@ -14,7 +15,7 @@ const API_URL = import.meta.env.VITE_API_URL || ''
 export default function OnboardingWizard({ onClose, onComplete }: OnboardingWizardProps) {
   const [step, setStep] = useState<Step>('credentials')
   const [error, setError] = useState<string | null>(null)
-  const [serverInfo, setServerInfo] = useState<any>(null)
+  const [serverInfo, setServerInfo] = useState<OnboardingResult | null>(null)
 
   const [credentials, setCredentials] = useState({
     hostname: '',
@@ -55,32 +56,54 @@ export default function OnboardingWizard({ onClose, onComplete }: OnboardingWiza
       const data = await response.json()
       setServerInfo(data)
       setStep('complete')
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
+      setError(errorMessage)
       setStep('credentials')
     }
   }
 
   const handleComplete = () => {
-    onComplete({
-      id: Date.now(),
+    if (!serverInfo) return
+
+    const server: ServerType = {
+      id: serverInfo.server_id,
       hostname: credentials.hostname,
       ip_address: credentials.ip_address,
       status: 'online',
-      ...serverInfo?.system_info,
-    })
+      os_info: serverInfo.system_info?.os,
+      cpu_info: serverInfo.system_info?.cpu,
+      cpu_cores: serverInfo.system_info?.cpu_cores,
+      memory_total: serverInfo.system_info?.memory_total,
+      disk_total: serverInfo.system_info?.disk_total,
+      gpu_info: serverInfo.system_info?.gpu,
+      agent_installed: serverInfo.agent_installed,
+    }
+    onComplete(server)
   }
 
   const currentStepIndex = steps.findIndex((s) => s.id === step)
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-surface-700 rounded-magnetic w-full max-w-xl m-4 border border-surface-600">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wizard-title"
+    >
+      <div
+        className="bg-surface-700 rounded-magnetic w-full max-w-xl m-4 border border-surface-600"
+        role="document"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-surface-600">
-          <h2 className="text-lg font-medium text-white">Add New Server</h2>
-          <button onClick={onClose} className="text-surface-400 hover:text-white">
-            <X className="w-5 h-5" />
+          <h2 id="wizard-title" className="text-lg font-medium text-white">Add New Server</h2>
+          <button
+            onClick={onClose}
+            className="text-surface-400 hover:text-white"
+            aria-label="Close dialog"
+          >
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 

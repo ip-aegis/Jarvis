@@ -1,0 +1,102 @@
+version: '3.8'
+
+# Production Docker Compose Configuration
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg15
+    container_name: jarvis-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-jarvis}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: jarvis
+    volumes:
+      - jarvis_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-jarvis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - jarvis-internal
+
+  backend:
+    image: ghcr.io/${GITHUB_REPOSITORY:-jarvis}/backend:${IMAGE_TAG:-latest}
+    container_name: jarvis-backend
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql://${DB_USER:-jarvis}:${DB_PASSWORD}@db:5432/jarvis
+      - OLLAMA_URL=${OLLAMA_URL:-http://10.10.20.62:11434}
+      - SEARXNG_URL=http://searxng:8080
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:?ADMIN_PASSWORD_HASH is required}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - jarvis_ssh_keys:/app/ssh_keys
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - jarvis-internal
+
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY:-jarvis}/frontend:${IMAGE_TAG:-latest}
+    container_name: jarvis-frontend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - jarvis-internal
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: jarvis-searxng
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    restart: unless-stopped
+    networks:
+      - jarvis-internal
+
+  nginx:
+    image: nginx:alpine
+    container_name: jarvis-nginx
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+      - frontend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - jarvis-internal
+
+networks:
+  jarvis-internal:
+    driver: bridge
+
+volumes:
+  jarvis_db_data:
+  jarvis_ssh_keys:

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2 } from 'lucide-react'
+import { Send, Loader2, RotateCcw } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { api } from '../../services/api'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -9,18 +10,59 @@ interface Message {
 
 interface ChatPanelProps {
   sessionId: string
-  context: 'general' | 'monitoring' | 'projects'
+  context: 'general' | 'monitoring' | 'projects' | 'network' | 'actions' | 'home' | 'journal' | 'work'
   placeholder?: string
   model?: string
+  onModelLoaded?: (model: string) => void
+  onNewChat?: () => void  // Callback when user wants a new chat
 }
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
-export default function ChatPanel({ sessionId, context, placeholder, model }: ChatPanelProps) {
-  const [messages, setMessages] = useState<Message[]>([])
+export default function ChatPanel({ sessionId, context, placeholder, model, onModelLoaded, onNewChat }: ChatPanelProps) {
+  const [messages, setMessages] = useState<Message[]>(() => {
+    // Only load persisted messages for work context (for "Learn from Chats" feature)
+    if (context === 'work') {
+      const stored = sessionStorage.getItem(`chat-${sessionId}`)
+      return stored ? JSON.parse(stored) : []
+    }
+    return []
+  })
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [defaultModel, setDefaultModel] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Persist messages to sessionStorage (only for work context)
+  useEffect(() => {
+    if (context === 'work' && messages.length > 0) {
+      sessionStorage.setItem(`chat-${sessionId}`, JSON.stringify(messages))
+    }
+  }, [messages, sessionId, context])
+
+  const clearChat = () => {
+    // Clear messages from state
+    setMessages([])
+    // Clear from sessionStorage
+    sessionStorage.removeItem(`chat-${sessionId}`)
+    // Notify parent if callback provided
+    onNewChat?.()
+  }
+
+  // Fetch default model for this context if no model prop provided
+  useEffect(() => {
+    if (!model) {
+      api.getModelDefaultForContext(context).then((res) => {
+        setDefaultModel(res.model)
+        onModelLoaded?.(res.model)
+      }).catch((err) => {
+        console.error('Failed to fetch default model:', err)
+      })
+    } else {
+      // If model is provided via prop, notify parent
+      onModelLoaded?.(model)
+    }
+  }, [context, model, onModelLoaded])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -47,7 +89,7 @@ export default function ChatPanel({ sessionId, context, placeholder, model }: Ch
           session_id: sessionId,
           context: context,
           history: messages,
-          model: model || undefined,
+          model: model || defaultModel || undefined,
         }),
       })
 
@@ -113,6 +155,19 @@ export default function ChatPanel({ sessionId, context, placeholder, model }: Ch
 
   return (
     <div className="h-full flex flex-col bg-surface-700 rounded-magnetic border border-surface-600">
+      {/* Header with New Chat button (only show when there are messages) */}
+      {messages.length > 0 && (
+        <div className="flex items-center justify-end px-3 py-2 border-b border-surface-600">
+          <button
+            onClick={clearChat}
+            className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-400 hover:text-white hover:bg-surface-600 rounded transition-colors"
+            title="Start new conversation"
+          >
+            <RotateCcw className="w-3 h-3" />
+            New Chat
+          </button>
+        </div>
+      )}
       {/* Messages */}
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {messages.length === 0 && (

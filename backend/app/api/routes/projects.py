@@ -1,13 +1,17 @@
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import Optional, List
 from datetime import datetime
+from typing import Optional
 
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.core.logging import get_logger
 from app.database import get_db
 from app.models import Project, Server
-from app.services.ssh import SSHService
 from app.services.ollama import OllamaService
+from app.services.ssh import SSHService
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -17,6 +21,7 @@ class ProjectCreate(BaseModel):
     server_id: int
     path: str
     description: Optional[str] = None
+    urls: Optional[list[str]] = None
 
 
 class ProjectResponse(BaseModel):
@@ -25,9 +30,9 @@ class ProjectResponse(BaseModel):
     server_id: int
     path: str
     description: Optional[str] = None
-    tech_stack: Optional[List[str]] = None
-    urls: Optional[List[str]] = None
-    ips: Optional[List[str]] = None
+    tech_stack: Optional[list[str]] = None
+    urls: Optional[list[str]] = None
+    ips: Optional[list[str]] = None
     last_scanned: Optional[str] = None
 
     class Config:
@@ -40,17 +45,19 @@ async def list_projects(db: Session = Depends(get_db)):
     projects = db.query(Project).all()
     result = []
     for p in projects:
-        result.append({
-            "id": p.id,
-            "name": p.name,
-            "server_id": p.server_id,
-            "path": p.path,
-            "description": p.description,
-            "tech_stack": p.tech_stack,
-            "urls": p.urls,
-            "ips": p.ips,
-            "last_scanned": p.last_scanned.isoformat() if p.last_scanned else None,
-        })
+        result.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "server_id": p.server_id,
+                "path": p.path,
+                "description": p.description,
+                "tech_stack": p.tech_stack,
+                "urls": p.urls,
+                "ips": p.ips,
+                "last_scanned": p.last_scanned.isoformat() if p.last_scanned else None,
+            }
+        )
     return {"projects": result}
 
 
@@ -68,6 +75,7 @@ async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         server_id=project.server_id,
         path=project.path,
         description=project.description,
+        urls=project.urls,
     )
     db.add(db_project)
     db.commit()
@@ -79,6 +87,7 @@ async def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
         "server_id": db_project.server_id,
         "path": db_project.path,
         "description": db_project.description,
+        "urls": db_project.urls,
     }
 
 
@@ -128,10 +137,14 @@ async def perform_project_scan(project_id: int, db: Session):
             return
 
         # Get directory listing
-        result = await ssh_service.execute(f"find {project.path} -maxdepth 3 -type f -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name 'package.json' -o -name 'requirements.txt' -o -name 'Cargo.toml' -o -name 'go.mod' -o -name 'pom.xml' -o -name 'Dockerfile' -o -name 'docker-compose.yml' 2>/dev/null | head -50")
+        result = await ssh_service.execute(
+            f"find {project.path} -maxdepth 3 -type f -name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' -o -name '*.rs' -o -name '*.java' -o -name 'package.json' -o -name 'requirements.txt' -o -name 'Cargo.toml' -o -name 'go.mod' -o -name 'pom.xml' -o -name 'Dockerfile' -o -name 'docker-compose.yml' 2>/dev/null | head -50"
+        )
 
         # Get README if exists
-        readme_result = await ssh_service.execute(f"cat {project.path}/README.md 2>/dev/null | head -100")
+        readme_result = await ssh_service.execute(
+            f"cat {project.path}/README.md 2>/dev/null | head -100"
+        )
 
         await ssh_service.disconnect()
 
@@ -166,7 +179,7 @@ Only respond with valid JSON, no other text."""
         import re
 
         # Try to extract JSON from response
-        json_match = re.search(r'\{[\s\S]*\}', response)
+        json_match = re.search(r"\{[\s\S]*\}", response)
         if json_match:
             try:
                 data = json.loads(json_match.group())
@@ -181,7 +194,7 @@ Only respond with valid JSON, no other text."""
                 pass
 
     except Exception as e:
-        print(f"Error scanning project: {e}")
+        logger.error("project_scan_failed", project_id=project_id, error=str(e))
 
 
 @router.post("/{project_id}/scan")

@@ -29,6 +29,7 @@ export default function Projects() {
     server_id: 0,
     path: '',
     description: '',
+    url: '',
   })
 
   const fetchProjects = async () => {
@@ -71,13 +72,14 @@ export default function Projects() {
         server_id: formData.server_id,
         path: formData.path,
         description: formData.description || undefined,
+        urls: formData.url ? [formData.url] : undefined,
       })
 
       // Trigger scan
       await api.scanProject(project.id)
 
       setShowAddForm(false)
-      setFormData({ name: '', server_id: servers[0]?.id || 0, path: '', description: '' })
+      setFormData({ name: '', server_id: servers[0]?.id || 0, path: '', description: '', url: '' })
       fetchProjects()
     } catch (err: any) {
       setError(err.message || 'Failed to create project')
@@ -194,6 +196,16 @@ export default function Projects() {
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 />
               </div>
+              <div>
+                <label className="block text-sm text-surface-300 mb-1">App URL (optional)</label>
+                <input
+                  type="url"
+                  className="magnetic-input"
+                  placeholder="https://myapp.example.com"
+                  value={formData.url}
+                  onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+                />
+              </div>
               <div className="flex gap-3">
                 <button type="submit" className="magnetic-button-primary">
                   Add & Scan
@@ -236,6 +248,18 @@ export default function Projects() {
                     <p className="text-sm text-surface-400">{project.path}</p>
                   </div>
                   <div className="flex items-center gap-2">
+                    {project.urls && project.urls.length > 0 && (
+                      <a
+                        href={project.urls[0]}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="magnetic-button-primary px-3 py-1 text-xs flex items-center gap-1"
+                        title="Open application"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        Open
+                      </a>
+                    )}
                     <button
                       onClick={() => handleScan(project.id)}
                       disabled={scanning === project.id}

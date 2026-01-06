@@ -1,22 +1,37 @@
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
-
-from app.config import get_settings
-from app.database import init_db
-from app.api.routes import servers, monitoring, projects, chat, dashboard, health, auth
-from app.core.exceptions import JarvisException
-from app.core.error_handlers import (
-    jarvis_exception_handler,
-    pydantic_validation_handler,
-    generic_exception_handler,
-)
-from app.core.logging import setup_logging, get_logger
-from app.core.middleware import RequestLoggingMiddleware
-from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+
+from app.api.routes import (
+    actions,
+    auth,
+    chat,
+    dashboard,
+    health,
+    home,
+    journal,
+    monitoring,
+    network,
+    projects,
+    servers,
+    work,
+)
+from app.api.routes import settings as settings_routes
+from app.config import get_settings
+from app.core.error_handlers import (
+    generic_exception_handler,
+    jarvis_exception_handler,
+    pydantic_validation_handler,
+)
+from app.core.exceptions import JarvisException
+from app.core.logging import get_logger, setup_logging
+from app.core.middleware import RequestLoggingMiddleware
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+from app.database import init_db
 
 settings = get_settings()
 
@@ -31,8 +46,27 @@ async def lifespan(app: FastAPI):
     logger.info("application_startup", app_name=settings.app_name)
     init_db()
     logger.info("database_initialized")
+
+    # Start home automation background tasks
+    try:
+        from app.services.home.background_tasks import start_background_tasks, stop_background_tasks
+
+        await start_background_tasks()
+        logger.info("home_automation_tasks_started")
+    except Exception as e:
+        logger.warning("home_automation_startup_failed", error=str(e))
+
     yield
+
     # Shutdown
+    try:
+        from app.services.home.background_tasks import stop_background_tasks
+
+        await stop_background_tasks()
+        logger.info("home_automation_tasks_stopped")
+    except Exception as e:
+        logger.warning("home_automation_shutdown_failed", error=str(e))
+
     logger.info("application_shutdown")
 
 
@@ -42,6 +76,9 @@ app = FastAPI(
     version="0.1.0",
     root_path="",
     lifespan=lifespan,
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
 )
 
 # CORS middleware - restrict to configured origins
@@ -75,6 +112,12 @@ app.include_router(monitoring.router, prefix="/api/monitoring", tags=["monitorin
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(network.router, prefix="/api/network", tags=["network"])
+app.include_router(actions.router, prefix="/api/actions", tags=["actions"])
+app.include_router(home.router, prefix="/api/home", tags=["home"])
+app.include_router(journal.router, prefix="/api/journal", tags=["journal"])
+app.include_router(work.router, prefix="/api/work", tags=["work"])
+app.include_router(settings_routes.router, prefix="/api/settings", tags=["settings"])
 
 
 @app.get("/")

@@ -3,8 +3,8 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -12,30 +12,35 @@ from app.core.exceptions import AuthenticationError
 
 settings = get_settings()
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 class TokenData(BaseModel):
     """Data extracted from JWT token."""
+
     username: str
     exp: Optional[datetime] = None
 
 
 class Token(BaseModel):
     """Token response model."""
+
     access_token: str
     token_type: str = "bearer"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"),
+        hashed_password.encode("utf-8"),
+    )
 
 
 def get_password_hash(password: str) -> str:
     """Generate password hash."""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(
+        password.encode("utf-8"),
+        bcrypt.gensalt(),
+    ).decode("utf-8")
 
 
 def create_access_token(
@@ -52,9 +57,7 @@ def create_access_token(
         Encoded JWT token string.
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + (
-        expires_delta or timedelta(hours=settings.jwt_expire_hours)
-    )
+    expire = datetime.utcnow() + (expires_delta or timedelta(hours=settings.jwt_expire_hours))
     to_encode.update({"exp": expire})
 
     return jwt.encode(

@@ -1,17 +1,18 @@
 """Pytest fixtures for Jarvis backend tests."""
 
-import pytest
-from typing import Generator
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.main import app
-from app.database import get_db, Base
 from app.core.security import create_access_token
+from app.database import get_db
+from app.main import app
+from app.models import Base
 
 # Use SQLite in-memory for tests
 TEST_DATABASE_URL = "sqlite:///:memory:"
@@ -88,16 +89,25 @@ def mock_ssh_service(mocker) -> MagicMock:
     """Mock SSHService for tests that don't need real SSH."""
     mock = mocker.patch("app.services.ssh.SSHService")
     instance = mock.return_value
-    instance.connect = MagicMock(return_value=True)
-    instance.disconnect = MagicMock()
-    instance.execute_command = MagicMock(return_value=("stdout", "stderr", 0))
-    instance.get_system_info = MagicMock(
+    # Use AsyncMock for async methods
+    instance.connect = AsyncMock(return_value=True)
+    instance.disconnect = AsyncMock()
+    instance.execute = AsyncMock(return_value=("stdout", "stderr", 0))
+    instance.execute_command = AsyncMock(return_value=("stdout", "stderr", 0))
+    instance.exchange_keys = AsyncMock(return_value=True)
+    instance.get_system_info = AsyncMock(
         return_value={
             "os": "Linux",
             "kernel": "5.15.0",
             "hostname": "test-server",
+            "cpu": "Intel Core i7",
+            "cpu_cores": 8,
+            "memory_total": "16 GB",
+            "disk_total": "500 GB",
+            "gpu": None,
         }
     )
+    instance.key_path = "/tmp/test_key"
     return instance
 
 

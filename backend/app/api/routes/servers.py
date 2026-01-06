@@ -1,13 +1,18 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import ServerOnboardingError
+from app.core.logging import get_logger
 from app.database import get_db
 from app.models import Server
-from app.services.ssh import SSHService
 from app.services.agent import AgentService
 from app.services.ollama import OllamaService
+from app.services.ssh import SSHService
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -165,8 +170,15 @@ Keep the response concise (under 200 words) and practical."""
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception(
+            "server_onboarding_failed",
+            hostname=request.credentials.hostname,
+            ip_address=request.credentials.ip_address,
+        )
+        raise ServerOnboardingError(
+            "Server onboarding failed. Please check server connectivity and credentials."
+        )
 
 
 @router.get("/{server_id}")

@@ -36,12 +36,12 @@ echo "Waiting for Ollama to start..."
 sleep 5
 
 # Pull the model
-echo "Pulling Llama 3.1 70B model (this may take a while)..."
-ollama pull llama3.1:70b-instruct-q4_K_M
+echo "Pulling Llama 3.1 8B model..."
+ollama pull llama3.1:8b
 
 echo ""
 echo "=== Setup Complete ==="
 echo "Ollama is now running on 0.0.0.0:11434"
-echo "Model: llama3.1:70b-instruct-q4_K_M"
+echo "Model: llama3.1:8b"
 echo ""
 echo "Test with: curl http://localhost:11434/api/tags"

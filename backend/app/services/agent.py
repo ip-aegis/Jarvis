@@ -1,8 +1,7 @@
-from typing import Optional
-import os
-from pathlib import Path
-
+from app.core.logging import get_logger
 from app.services.ssh import SSHService
+
+logger = get_logger(__name__)
 
 
 class AgentService:
@@ -233,7 +232,7 @@ if __name__ == "__main__":
     main()
 '''
 
-    SYSTEMD_SERVICE = '''[Unit]
+    SYSTEMD_SERVICE = """[Unit]
 Description=Jarvis Monitoring Agent
 After=network.target
 
@@ -246,7 +245,7 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-'''
+"""
 
     async def install(
         self,
@@ -260,7 +259,7 @@ WantedBy=multi-user.target
         # Create agent directory (requires sudo)
         stdout, stderr, exit_code = await ssh_service.execute("sudo mkdir -p /opt/jarvis")
         if exit_code != 0:
-            print(f"Failed to create directory: {stderr}")
+            logger.error("agent_directory_creation_failed", stderr=stderr)
             return False
 
         # Generate agent script with configuration
@@ -272,12 +271,15 @@ WantedBy=multi-user.target
 
         # Write agent script using echo with base64 to avoid heredoc issues
         import base64
+
         encoded_script = base64.b64encode(agent_script.encode()).decode()
 
-        write_cmd = f"echo '{encoded_script}' | base64 -d | sudo tee /opt/jarvis/agent.py > /dev/null"
+        write_cmd = (
+            f"echo '{encoded_script}' | base64 -d | sudo tee /opt/jarvis/agent.py > /dev/null"
+        )
         stdout, stderr, exit_code = await ssh_service.execute(write_cmd)
         if exit_code != 0:
-            print(f"Failed to write agent script: {stderr}")
+            logger.error("agent_script_write_failed", stderr=stderr)
             return False
 
         # Make executable
@@ -295,6 +297,7 @@ WantedBy=multi-user.target
 
         # Give it a moment to start
         import asyncio
+
         await asyncio.sleep(2)
 
         # Verify it's running
@@ -303,8 +306,10 @@ WantedBy=multi-user.target
 
         if not is_active:
             # Get error details
-            stdout, _, _ = await ssh_service.execute("sudo journalctl -u jarvis-agent -n 10 --no-pager")
-            print(f"Agent not active. Journal: {stdout}")
+            stdout, _, _ = await ssh_service.execute(
+                "sudo journalctl -u jarvis-agent -n 10 --no-pager"
+            )
+            logger.warning("agent_not_active", journal_output=stdout)
 
         return is_active
 

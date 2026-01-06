@@ -12,10 +12,15 @@ psycopg2-binary>=2.9.9
 # LLM
 ollama>=0.3.0
 httpx>=0.25.0
+openai>=1.12.0
+tiktoken>=0.5.2
+
+# Vector embeddings
+pgvector>=0.2.4
 
 # SSH
 paramiko==3.4.0
-cryptography==42.0.0
+cryptography>=44.0.0
 
 # Utilities
 pydantic==2.5.3
@@ -36,7 +41,20 @@ tenacity==8.2.3
 
 # Authentication
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+bcrypt>=4.0.0
 
 # Rate limiting
 slowapi==0.1.9
+
+# SNMP for network device polling
+pysnmp>=4.4.12
+pysnmp-mibs>=0.1.6
+
+# Task scheduling
+APScheduler==3.10.4
+
+# Home Automation
+ring-doorbell>=0.9.0
+thinqconnect>=1.0.0
+homeconnect>=0.8.0
+pyatv>=0.16.0

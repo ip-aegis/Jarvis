@@ -1,0 +1,48 @@
+# Production Dockerfile for Jarvis Backend
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build wheels
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+
+# Production image
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime dependencies and curl for health checks
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash jarvis
+
+# Install Python packages from wheels
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+
+# Copy application code
+COPY --chown=jarvis:jarvis . .
+
+# Create SSH keys directory
+RUN mkdir -p /app/ssh_keys && chown jarvis:jarvis /app/ssh_keys
+
+# Switch to non-root user
+USER jarvis
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health/live || exit 1
+
+# Production command with multiple workers
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]

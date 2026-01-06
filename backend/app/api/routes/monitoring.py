@@ -1,21 +1,25 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import desc
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
-from pydantic import BaseModel
-import asyncio
 import json
+from datetime import datetime, timedelta
+from typing import Optional
 
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+from sqlalchemy import desc, func
+from sqlalchemy.orm import Session
+
+from app.core.logging import get_logger
 from app.database import get_db
-from app.models import Server, Metric
+from app.models import Metric, Server
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
 
 class AgentCPU(BaseModel):
     usage: Optional[float] = None
-    per_core: Optional[Dict[str, float]] = None  # {"cpu0": 25.5, "cpu1": 35.2, ...}
+    per_core: Optional[dict[str, float]] = None  # {"cpu0": 25.5, "cpu1": 35.2, ...}
+
 
 class AgentMemory(BaseModel):
     total: Optional[float] = None
@@ -27,10 +31,12 @@ class AgentMemory(BaseModel):
     swap_total: Optional[float] = None
     swap_used: Optional[float] = None
 
+
 class AgentDisk(BaseModel):
     total: Optional[float] = None
     used: Optional[float] = None
     percent: Optional[float] = None
+
 
 class AgentGPU(BaseModel):
     utilization: Optional[float] = None
@@ -39,6 +45,7 @@ class AgentGPU(BaseModel):
     memory_percent: Optional[float] = None
     temperature: Optional[float] = None
     power: Optional[float] = None
+
 
 class AgentLoadAvg(BaseModel):
     one_m: Optional[float] = None
@@ -56,12 +63,9 @@ class AgentLoadAvg(BaseModel):
     @classmethod
     def validate(cls, v):
         if isinstance(v, dict):
-            return cls(
-                one_m=v.get("1m"),
-                five_m=v.get("5m"),
-                fifteen_m=v.get("15m")
-            )
+            return cls(one_m=v.get("1m"), five_m=v.get("5m"), fifteen_m=v.get("15m"))
         return v
+
 
 class MetricReport(BaseModel):
     server_id: int
@@ -71,14 +75,14 @@ class MetricReport(BaseModel):
     memory: Optional[AgentMemory] = None
     disk: Optional[AgentDisk] = None
     gpu: Optional[AgentGPU] = None
-    load_avg: Optional[Dict[str, float]] = None  # {"1m": 1.5, "5m": 2.1, "15m": 1.8}
-    temperatures: Optional[Dict[str, float]] = None
+    load_avg: Optional[dict[str, float]] = None  # {"1m": 1.5, "5m": 2.1, "15m": 1.8}
+    temperatures: Optional[dict[str, float]] = None
 
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
-        self.subscriptions: Dict[WebSocket, List[int]] = {}
+        self.active_connections: list[WebSocket] = []
+        self.subscriptions: dict[WebSocket, list[int]] = {}
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -91,7 +95,7 @@ class ConnectionManager:
         if websocket in self.subscriptions:
             del self.subscriptions[websocket]
 
-    def subscribe(self, websocket: WebSocket, server_ids: List[int]):
+    def subscribe(self, websocket: WebSocket, server_ids: list[int]):
         self.subscriptions[websocket] = server_ids
 
     async def broadcast(self, message: dict):
@@ -103,8 +107,8 @@ class ConnectionManager:
                 # Send if no subscriptions (send all) or if subscribed to this server
                 if not subscribed or server_id in subscribed:
                     await connection.send_json(message)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("websocket_broadcast_failed", error=str(e), server_id=server_id)
 
 
 manager = ConnectionManager()
@@ -112,31 +116,46 @@ manager = ConnectionManager()
 
 @router.get("/")
 async def get_all_metrics(db: Session = Depends(get_db)):
-    """Get current metrics for all servers."""
-    servers = db.query(Server).all()
-    metrics = []
+    """Get current metrics for all servers.
 
-    for server in servers:
-        # Get the most recent metric for each server
-        latest = (
-            db.query(Metric)
-            .filter(Metric.server_id == server.id)
-            .order_by(desc(Metric.timestamp))
-            .first()
+    Uses a subquery to efficiently fetch the latest metric for each server
+    in a single database query (avoids N+1 query problem).
+    """
+    # Subquery to get the latest timestamp for each server
+    latest_timestamp_subquery = (
+        db.query(Metric.server_id, func.max(Metric.timestamp).label("max_timestamp"))
+        .group_by(Metric.server_id)
+        .subquery()
+    )
+
+    # Join servers with their latest metrics in one query
+    results = (
+        db.query(Server, Metric)
+        .outerjoin(latest_timestamp_subquery, Server.id == latest_timestamp_subquery.c.server_id)
+        .outerjoin(
+            Metric,
+            (Metric.server_id == Server.id)
+            & (Metric.timestamp == latest_timestamp_subquery.c.max_timestamp),
         )
+        .all()
+    )
 
-        metrics.append({
-            "server_id": server.id,
-            "hostname": server.hostname,
-            "ip_address": server.ip_address,
-            "status": server.status,
-            "cpu_usage": latest.cpu_usage if latest else None,
-            "memory_percent": latest.memory_percent if latest else None,
-            "disk_percent": latest.disk_percent if latest else None,
-            "gpu_utilization": latest.gpu_utilization if latest else None,
-            "gpu_temperature": latest.gpu_temperature if latest else None,
-            "last_updated": latest.timestamp.isoformat() if latest else None,
-        })
+    metrics = []
+    for server, latest in results:
+        metrics.append(
+            {
+                "server_id": server.id,
+                "hostname": server.hostname,
+                "ip_address": server.ip_address,
+                "status": server.status,
+                "cpu_usage": latest.cpu_usage if latest else None,
+                "memory_percent": latest.memory_percent if latest else None,
+                "disk_percent": latest.disk_percent if latest else None,
+                "gpu_utilization": latest.gpu_utilization if latest else None,
+                "gpu_temperature": latest.gpu_temperature if latest else None,
+                "last_updated": latest.timestamp.isoformat() if latest else None,
+            }
+        )
 
     return {"metrics": metrics}
 
@@ -161,7 +180,14 @@ async def get_server_metrics(server_id: int, db: Session = Depends(get_db)):
             "hostname": server.hostname,
             "status": server.status,
             "cpu": {"usage": 0, "cores": server.cpu_cores or 0, "per_core": {}},
-            "memory": {"used": 0, "total": 0, "percent": 0, "available": 0, "buffers": 0, "cached": 0},
+            "memory": {
+                "used": 0,
+                "total": 0,
+                "percent": 0,
+                "available": 0,
+                "buffers": 0,
+                "cached": 0,
+            },
             "swap": {"used": 0, "total": 0},
             "disk": {"used": 0, "total": 0, "percent": 0},
             "gpu": None,
@@ -203,7 +229,9 @@ async def get_server_metrics(server_id: int, db: Session = Depends(get_db)):
             "memory_percent": latest.gpu_memory_percent,
             "temperature": latest.gpu_temperature,
             "power": latest.gpu_power,
-        } if latest.gpu_utilization is not None else None,
+        }
+        if latest.gpu_utilization is not None
+        else None,
         "load_avg": {
             "1m": latest.load_avg_1m,
             "5m": latest.load_avg_5m,
@@ -253,10 +281,12 @@ async def get_metrics_history(
             value = m.gpu_power
 
         if value is not None:
-            data.append({
-                "timestamp": m.timestamp.isoformat(),
-                "value": value,
-            })
+            data.append(
+                {
+                    "timestamp": m.timestamp.isoformat(),
+                    "value": value,
+                }
+            )
 
     return {"data": data, "metric": metric, "hours": hours}
 
@@ -273,10 +303,12 @@ async def websocket_metrics(websocket: WebSocket):
             if message.get("action") == "subscribe":
                 server_ids = message.get("server_ids", [])
                 manager.subscribe(websocket, server_ids)
-                await websocket.send_json({
-                    "type": "subscribed",
-                    "server_ids": server_ids,
-                })
+                await websocket.send_json(
+                    {
+                        "type": "subscribed",
+                        "server_ids": server_ids,
+                    }
+                )
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)

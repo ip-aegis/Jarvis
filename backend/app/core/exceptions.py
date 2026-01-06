@@ -112,3 +112,25 @@ class RateLimitError(JarvisException):
             code="RATE_LIMIT_ERROR",
             status_code=429,
         )
+
+
+class InternalServerError(JarvisException):
+    """Internal server error - hides internal details from clients."""
+
+    def __init__(self, message: str = "An internal error occurred"):
+        super().__init__(
+            message=message,
+            code="INTERNAL_ERROR",
+            status_code=500,
+        )
+
+
+class ServerOnboardingError(JarvisException):
+    """Server onboarding failed."""
+
+    def __init__(self, message: str = "Server onboarding failed"):
+        super().__init__(
+            message=message,
+            code="ONBOARDING_ERROR",
+            status_code=500,
+        )

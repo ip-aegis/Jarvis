@@ -34,19 +34,21 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: jarvis-backend
-    ports:
-      - "8000:8000"
+    network_mode: host
     environment:
-      - DATABASE_URL=postgresql://jarvis:jarvis_dev_password@db:5432/jarvis
+      - DATABASE_URL=postgresql://jarvis:jarvis_dev_password@localhost:5432/jarvis
       - OLLAMA_URL=http://10.10.20.62:11434
-      - SEARXNG_URL=http://searxng:8080
-    depends_on:
-      db:
-        condition: service_healthy
+      - SEARXNG_URL=http://localhost:8888
     volumes:
       - ./backend:/app
       - jarvis_ssh_keys:/app/ssh_keys
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
 
   frontend:
     build:
@@ -61,6 +63,12 @@ services:
       - ./frontend:/app
       - /app/node_modules
     command: npm run dev -- --host 0.0.0.0
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
 
 volumes:
   jarvis_db_data:
