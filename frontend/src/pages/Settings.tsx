@@ -13,6 +13,7 @@ const CONTEXT_LABELS: Record<keyof ModelDefaults, string> = {
   home: 'Home Automation',
   journal: 'Journal',
   work: 'Work Notes',
+  dns: 'DNS Security',
 }
 
 interface Recommendation {

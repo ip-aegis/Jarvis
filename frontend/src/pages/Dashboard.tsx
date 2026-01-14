@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Activity, FolderGit2, AlertTriangle, Clock, Folder, Bell } from 'lucide-react'
+import { Server, Activity, FolderGit2, AlertTriangle, Clock, Folder, Bell, Zap, DollarSign } from 'lucide-react'
 import api from '../api/client'
 
 interface DashboardStats {
@@ -16,6 +16,22 @@ interface ActivityItem {
   icon: string
 }
 
+interface UsageFeature {
+  feature: string
+  request_count: number
+  total_tokens: number
+  cost_cents: number
+}
+
+interface UsageSummary {
+  period_hours: number
+  request_count: number
+  total_tokens: number
+  total_cost_cents: number
+  total_cost_dollars: number
+  by_feature: UsageFeature[]
+}
+
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats>({
     servers: 0,
@@ -24,17 +40,20 @@ export default function Dashboard() {
     alerts: 0,
   })
   const [activities, setActivities] = useState<ActivityItem[]>([])
+  const [usage, setUsage] = useState<UsageSummary | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, activityRes] = await Promise.all([
+        const [statsRes, activityRes, usageRes] = await Promise.all([
           api.get('/api/dashboard/stats'),
           api.get('/api/dashboard/activity'),
+          api.get('/api/usage/summary', { params: { hours: 24 } }),
         ])
         setStats(statsRes.data)
         setActivities(activityRes.data.activities || [])
+        setUsage(usageRes.data)
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error)
       } finally {
@@ -122,32 +141,88 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Recent Activity */}
-      <div className="magnetic-card">
-        <h2 className="text-lg font-medium text-white mb-4">Recent Activity</h2>
-        {loading ? (
-          <div className="text-surface-300 text-sm">Loading...</div>
-        ) : activities.length === 0 ? (
-          <div className="text-surface-300 text-sm">
-            No recent activity. Add a server to get started.
+      {/* Recent Activity and LLM Usage */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recent Activity */}
+        <div className="magnetic-card">
+          <h2 className="text-lg font-medium text-white mb-4">Recent Activity</h2>
+          {loading ? (
+            <div className="text-surface-300 text-sm">Loading...</div>
+          ) : activities.length === 0 ? (
+            <div className="text-surface-300 text-sm">
+              No recent activity. Add a server to get started.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {activities.map((activity, index) => (
+                <div key={index} className="flex items-center gap-3 text-sm">
+                  <div className="p-2 rounded-magnetic bg-surface-600 text-surface-300">
+                    {getActivityIcon(activity.icon)}
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-white">{activity.message}</p>
+                  </div>
+                  <div className="text-surface-400 text-xs">
+                    {formatTimestamp(activity.timestamp)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* LLM Usage Widget */}
+        <div className="magnetic-card">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-medium text-white">LLM Usage (24h)</h2>
+            <div className="p-2 rounded-magnetic bg-surface-600 text-primary">
+              <Zap className="w-5 h-5" />
+            </div>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {activities.map((activity, index) => (
-              <div key={index} className="flex items-center gap-3 text-sm">
-                <div className="p-2 rounded-magnetic bg-surface-600 text-surface-300">
-                  {getActivityIcon(activity.icon)}
+          {loading ? (
+            <div className="text-surface-300 text-sm">Loading...</div>
+          ) : !usage ? (
+            <div className="text-surface-300 text-sm">No usage data available</div>
+          ) : (
+            <div className="space-y-4">
+              {/* Cost Summary */}
+              <div className="flex items-center justify-between p-3 rounded-magnetic bg-surface-600">
+                <div className="flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-success" />
+                  <span className="text-surface-300">Total Cost</span>
                 </div>
-                <div className="flex-1">
-                  <p className="text-white">{activity.message}</p>
+                <span className="text-xl font-semibold text-white">
+                  ${usage.total_cost_dollars.toFixed(4)}
+                </span>
+              </div>
+
+              {/* Token Stats */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-magnetic bg-surface-600">
+                  <p className="text-surface-400 text-xs">Requests</p>
+                  <p className="text-lg font-semibold text-white">{usage.request_count.toLocaleString()}</p>
                 </div>
-                <div className="text-surface-400 text-xs">
-                  {formatTimestamp(activity.timestamp)}
+                <div className="p-3 rounded-magnetic bg-surface-600">
+                  <p className="text-surface-400 text-xs">Tokens</p>
+                  <p className="text-lg font-semibold text-white">{usage.total_tokens.toLocaleString()}</p>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+
+              {/* Feature Breakdown */}
+              {usage.by_feature.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-surface-400 text-xs uppercase tracking-wide">By Feature</p>
+                  {usage.by_feature.map((f) => (
+                    <div key={f.feature} className="flex items-center justify-between text-sm">
+                      <span className="text-surface-300 capitalize">{f.feature}</span>
+                      <span className="text-white">{f.total_tokens.toLocaleString()} tokens</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

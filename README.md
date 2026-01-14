@@ -17,6 +17,14 @@ An AI/LLM-enabled lab monitoring, smart home automation, and personal productivi
 - Interface discovery and traffic statistics
 - REST API device integration (Unifi)
 
+### DNS Security & Analytics
+- AdGuard Home integration with blocklist management
+- Threat detection: DGA, DNS tunneling, fast-flux networks
+- Domain reputation scoring with entropy analysis
+- Client behavioral profiling and anomaly detection
+- LLM-powered threat analysis with remediation recommendations
+- Real-time security alerts via WebSocket
+
 ### Smart Home Automation
 - **Ring**: Doorbells, cameras, security systems
 - **LG ThinQ**: Washers, dryers, appliances
@@ -26,14 +34,20 @@ An AI/LLM-enabled lab monitoring, smart home automation, and personal productivi
 - Event monitoring and automation rules
 
 ### Personal Productivity
-- **Journal**: Personal journaling with AI-powered semantic search and automatic summarization
-- **Work Management**: Client/vendor account tracking, notes with action items, account enrichment
+- **Journal**: Personal journaling with AI-powered semantic search, automatic summarization, and user profile learning
+- **Work Management**: Client/vendor account tracking, notes with action items, account intelligence with company data enrichment
 
 ### AI-Powered Chat
-- Multiple isolated contexts for different tasks
+- Multiple isolated contexts (general, monitoring, network, dns, home, journal, work)
 - OpenAI API integration with tool calling
 - Context-aware responses with access to real-time data
-- Streaming responses
+- Streaming responses with comprehensive usage tracking
+
+### LLM Usage Analytics
+- Per-request token and cost tracking
+- Breakdown by feature, function, and model
+- Historical trends and monthly reporting
+- Support for OpenAI pricing (GPT-4o, GPT-4o-mini, embeddings)
 
 ### Infrastructure Automation
 - Command execution with confirmation workflow
@@ -49,6 +63,7 @@ An AI/LLM-enabled lab monitoring, smart home automation, and personal productivi
 | Database | PostgreSQL 15 with TimescaleDB |
 | LLM | OpenAI API (primary), Ollama (local) |
 | Search | SearXNG (self-hosted) |
+| DNS | AdGuard Home |
 | Proxy | Nginx with HTTPS |
 
 ## Quick Start
@@ -112,6 +127,11 @@ OLLAMA_URL=http://localhost:11434
 # Search
 SEARXNG_URL=http://localhost:8888
 
+# DNS (optional)
+ADGUARD_URL=http://localhost:3053
+ADGUARD_USERNAME=admin
+ADGUARD_PASSWORD=your-password
+
 # Security
 SECRET_KEY=your-secret-key-here
 JWT_ALGORITHM=HS256
@@ -138,12 +158,12 @@ RING_PASSWORD=your-ring-password
      |   (port 3000)   |          |    (port 8000)   |
      +-----------------+          +--------+---------+
                                            |
-         +------------+------------+-------+-------+
-         |            |            |               |
-   +-----v----+ +-----v----+ +-----v-----+ +-------v------+
-   | OpenAI   | | Ollama   | | SearXNG   | | PostgreSQL   |
-   | API      | | (LLM)    | | (Search)  | | TimescaleDB  |
-   +----------+ +----------+ +-----------+ +--------------+
+         +----------+----------+-----------+-----------+
+         |          |          |           |           |
+   +-----v----+ +---v----+ +---v-----+ +---v------+ +--v--------+
+   | OpenAI   | | Ollama | | SearXNG | | AdGuard  | | PostgreSQL|
+   | API      | | (LLM)  | | (Search)| | (DNS)    | | TimescaleDB|
+   +----------+ +--------+ +---------+ +----------+ +-----------+
 ```
 
 ## API Documentation
@@ -163,6 +183,9 @@ When the backend is running, access the interactive API documentation:
 | `POST /api/home/devices/{id}/action` | Control smart home device |
 | `POST /api/journal/entries` | Create journal entry |
 | `GET /api/work/accounts` | List work accounts |
+| `GET /api/dns/stats` | DNS query statistics |
+| `GET /api/dns/alerts` | DNS security alerts |
+| `GET /api/usage/summary` | LLM usage summary |
 
 ## Project Structure
 

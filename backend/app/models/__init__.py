@@ -804,3 +804,435 @@ class WorkUserProfile(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# =============================================================================
+# Journal User Profile
+# =============================================================================
+
+
+class JournalUserProfile(Base):
+    """User profile learned from journal conversations."""
+
+    __tablename__ = "journal_user_profile"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Core identity
+    name = Column(String(255))
+    nickname = Column(String(255))  # How user refers to themselves
+
+    # Life context (JSON for flexibility)
+    life_context = Column(
+        JSON
+    )  # {"relationships": [...], "living_situation": "...", "pets": [...]}
+    interests = Column(JSON)  # ["hiking", "cooking", "reading"]
+    goals = Column(JSON)  # ["learn Spanish", "run a marathon"]
+    challenges = Column(JSON)  # ["managing stress", "work-life balance"]
+    values = Column(JSON)  # ["family", "creativity", "health"]
+    communication_style = Column(Text)  # Free-form notes about how they express themselves
+
+    # Learning metadata
+    # Each fact: {"id": uuid, "fact": "...", "category": "identity|relationships|interests|goals|challenges|values|life_events",
+    #             "confidence": 0.9, "source_session_id": "...", "learned_at": "...", "verified": false}
+    learned_facts = Column(JSON, default=list)
+    last_learned_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# =============================================================================
+# Journal Fact Extraction History
+# =============================================================================
+
+
+class JournalFactExtraction(Base):
+    """Records fact extraction attempts for visibility and debugging."""
+
+    __tablename__ = "journal_fact_extractions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(255), index=True)
+    extracted_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # The extracted fact
+    fact_text = Column(Text, nullable=False)
+    category = Column(String(50))
+    confidence = Column(Float)
+
+    # What happened to this fact
+    status = Column(String(20), nullable=False)  # "added", "duplicate", "low_confidence"
+    duplicate_of = Column(Text)  # If duplicate, what it matched against
+
+
+# =============================================================================
+# DNS Security Models
+# =============================================================================
+
+
+class DnsConfig(Base):
+    """DNS service configuration."""
+
+    __tablename__ = "dns_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    enabled = Column(Boolean, default=True)
+
+    # Upstream DNS servers
+    upstream_dns = Column(JSON)  # ["https://dns.cloudflare.com/dns-query"]
+    bootstrap_dns = Column(JSON)  # ["9.9.9.9", "1.1.1.1"]
+
+    # Feature flags
+    dnssec_enabled = Column(Boolean, default=True)
+    doh_enabled = Column(Boolean, default=True)
+    dot_enabled = Column(Boolean, default=True)
+
+    # Filtering
+    filtering_enabled = Column(Boolean, default=True)
+    safe_browsing = Column(Boolean, default=True)
+    parental_control = Column(Boolean, default=False)
+
+    # Caching
+    cache_size = Column(Integer, default=4194304)  # 4MB
+    cache_ttl_min = Column(Integer, default=60)
+    cache_ttl_max = Column(Integer, default=86400)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DnsBlocklist(Base):
+    """DNS blocklist subscriptions."""
+
+    __tablename__ = "dns_blocklists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    url = Column(String(512), nullable=False, unique=True)
+    category = Column(String(50))  # ads, tracking, malware, phishing, adult
+    enabled = Column(Boolean, default=True)
+    rules_count = Column(Integer, default=0)
+    last_updated = Column(DateTime)
+    update_frequency_hours = Column(Integer, default=24)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DnsCustomRule(Base):
+    """User-defined DNS rules (block/allow/rewrite)."""
+
+    __tablename__ = "dns_custom_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rule_type = Column(String(20), nullable=False)  # block, allow, rewrite
+    domain = Column(String(255), nullable=False, index=True)
+    answer = Column(String(255))  # For rewrites
+    comment = Column(Text)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(255))
+
+
+class DnsClient(Base):
+    """Known DNS clients with per-client settings."""
+
+    __tablename__ = "dns_clients"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(String(100), unique=True, nullable=False)  # IP or MAC
+    name = Column(String(255))
+    ip_addresses = Column(JSON)  # ["10.10.20.50"]
+    mac_address = Column(String(17))
+
+    # Per-client settings
+    use_global_settings = Column(Boolean, default=True)
+    filtering_enabled = Column(Boolean, default=True)
+    safe_browsing = Column(Boolean)
+    parental_control = Column(Boolean)
+    blocked_services = Column(JSON)  # ["facebook", "tiktok"]
+    custom_upstream = Column(JSON)  # Override upstream for this client
+
+    # Statistics
+    queries_count = Column(BigInteger, default=0)
+    blocked_count = Column(BigInteger, default=0)
+    last_seen = Column(DateTime)
+
+    # Profiling
+    has_profile = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DnsQueryLog(Base):
+    """DNS query log entries (TimescaleDB hypertable)."""
+
+    __tablename__ = "dns_query_log"
+
+    id = Column(BigInteger, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+
+    # Query details
+    client_ip = Column(String(45), nullable=False, index=True)
+    client_name = Column(String(255))
+    domain = Column(String(255), nullable=False, index=True)
+    query_type = Column(String(10))  # A, AAAA, CNAME, MX, etc.
+
+    # Response
+    response_code = Column(String(20))  # NOERROR, NXDOMAIN, SERVFAIL
+    response_ip = Column(String(45))
+    answer = Column(Text)
+
+    # Classification
+    status = Column(String(20), index=True)  # allowed, blocked, filtered
+    block_reason = Column(String(100))  # adblock, safebrowsing, parental, custom
+    blocklist_id = Column(Integer, ForeignKey("dns_blocklists.id"))
+
+    # Performance
+    upstream = Column(String(255))
+    response_time_ms = Column(Float)
+    cached = Column(Boolean, default=False)
+
+    # Security indicators
+    is_encrypted = Column(Boolean)  # DoH/DoT
+    dnssec_validated = Column(Boolean)
+
+    blocklist = relationship("DnsBlocklist")
+
+
+class DnsStats(Base):
+    """Aggregated DNS statistics (hourly/daily rollups)."""
+
+    __tablename__ = "dns_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    period = Column(String(10))  # hour, day
+
+    total_queries = Column(BigInteger, default=0)
+    blocked_queries = Column(BigInteger, default=0)
+    cached_queries = Column(BigInteger, default=0)
+
+    avg_response_time = Column(Float)
+
+    # Top lists (JSON for flexibility)
+    top_domains = Column(JSON)  # [{"domain": "google.com", "count": 1500}]
+    top_blocked = Column(JSON)
+    top_clients = Column(JSON)
+
+    # Category breakdown
+    block_by_category = Column(JSON)  # {"ads": 500, "tracking": 200}
+
+
+# =============================================================================
+# DNS Analytics Models
+# =============================================================================
+
+
+class DnsClientProfile(Base):
+    """Behavioral baseline profile for DNS clients."""
+
+    __tablename__ = "dns_client_profile"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(
+        String(100), ForeignKey("dns_clients.client_id"), unique=True, nullable=False
+    )
+
+    # Behavioral baselines
+    baseline_domains = Column(JSON)  # {"google.com": {"hourly_avg": 15, "std_dev": 3}}
+    typical_query_hours = Column(JSON)  # {"0": 2, "1": 1, ... "23": 45}
+    typical_query_types = Column(JSON)  # {"A": 85, "AAAA": 10, "MX": 5}
+    typical_categories = Column(JSON)  # {"cdn": 40, "social": 20}
+
+    # Device inference
+    device_type_inference = Column(String(50))  # desktop, mobile, iot, server
+    device_type_confidence = Column(Float)
+
+    # Query rate statistics
+    normal_query_rate_per_hour = Column(Float)
+    query_rate_std_dev = Column(Float)
+    max_query_rate_observed = Column(Float)
+
+    # Baseline metadata
+    baseline_generated_at = Column(DateTime)
+    baseline_data_points = Column(Integer, default=0)
+    baseline_days_analyzed = Column(Integer, default=7)
+
+    # Sensitivity settings
+    anomaly_sensitivity = Column(Float, default=2.0)  # Std dev multiplier
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship to client
+    client = relationship("DnsClient")
+
+
+class DnsDomainReputation(Base):
+    """Cached reputation scores for domains."""
+
+    __tablename__ = "dns_domain_reputation"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(255), unique=True, nullable=False)
+
+    # Reputation scoring
+    reputation_score = Column(Float)  # 0-100 (100 = trusted)
+    entropy_score = Column(Float)  # Shannon entropy
+
+    # Domain metadata
+    domain_age_days = Column(Integer)
+    typical_ttl = Column(Integer)
+    registrar = Column(String(255))
+
+    # Categorization
+    category = Column(String(50), index=True)  # cdn, advertising, social, etc.
+    category_confidence = Column(Float)
+    category_source = Column(String(50))  # llm, manual
+
+    # Query statistics
+    first_seen = Column(DateTime)
+    last_seen = Column(DateTime)
+    query_count = Column(BigInteger, default=0)
+    unique_clients = Column(Integer, default=0)
+
+    # Threat indicators
+    threat_indicators = Column(JSON)  # {"dga_score": 0.85, "tunneling_score": 0.1}
+
+    # LLM analysis cache
+    llm_analysis = Column(Text)  # JSON with full analysis
+    llm_analyzed_at = Column(DateTime)
+
+    # External reputation (optional)
+    external_reputation = Column(JSON)  # {"virustotal": {...}}
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DnsSecurityAlert(Base):
+    """DNS security alerts with LLM analysis."""
+
+    __tablename__ = "dns_security_alert"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_id = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, nullable=False)
+    timestamp = Column(DateTime, nullable=False, index=True)
+
+    # Alert classification
+    alert_type = Column(
+        String(50), nullable=False, index=True
+    )  # dga, tunneling, fast_flux, behavioral, reputation
+    severity = Column(String(20), nullable=False, index=True)  # low, medium, high, critical
+
+    # Context
+    client_ip = Column(String(45), index=True)
+    domain = Column(String(255))
+    domains = Column(JSON)  # For multi-domain alerts
+
+    # Alert content
+    title = Column(String(255), nullable=False)
+    description = Column(Text)
+    raw_data = Column(JSON)  # Full detection context
+
+    # LLM analysis
+    llm_analysis = Column(Text)  # Natural language explanation
+    remediation = Column(Text)  # LLM recommendations
+    confidence = Column(Float)  # Analysis confidence
+
+    # Status tracking
+    status = Column(
+        String(20), default="open", index=True
+    )  # open, acknowledged, resolved, false_positive
+    acknowledged_at = Column(DateTime)
+    acknowledged_by = Column(String(255))
+    resolved_at = Column(DateTime)
+    resolution_notes = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DnsThreatAnalysis(Base):
+    """Cached LLM threat analyses."""
+
+    __tablename__ = "dns_threat_analysis"
+
+    id = Column(Integer, primary_key=True, index=True)
+    analysis_id = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, nullable=False)
+
+    # Analysis target
+    analysis_type = Column(String(50), nullable=False)  # domain, pattern, client_behavior
+    target_identifier = Column(String(255), nullable=False)  # domain or client_ip
+
+    # Analysis result
+    analysis_result = Column(JSON)  # Full LLM response
+    threat_level = Column(String(20))
+    classification = Column(String(50))
+    confidence = Column(Float)
+    recommendations = Column(JSON)
+
+    # Metadata
+    model_used = Column(String(100))
+    tokens_used = Column(Integer)
+    analysis_duration_ms = Column(Float)
+
+    # Cache control
+    analyzed_at = Column(DateTime)
+    expires_at = Column(DateTime, index=True)
+
+
+# =============================================================================
+# LLM Usage Tracking
+# =============================================================================
+
+
+class LlmUsageLog(Base):
+    """Per-request LLM usage tracking."""
+
+    __tablename__ = "llm_usage_log"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+
+    # Request context
+    feature = Column(String(50), nullable=False, index=True)  # chat, journal, dns, work, settings
+    function_name = Column(String(100), index=True)  # chat_stream, fact_extraction, etc.
+    context = Column(String(50))  # general, monitoring, projects, network, dns, etc.
+    session_id = Column(String(255))
+
+    # Model info
+    model = Column(String(100), nullable=False)
+
+    # Token counts
+    prompt_tokens = Column(Integer, nullable=False)
+    completion_tokens = Column(Integer, nullable=False)
+    total_tokens = Column(Integer, nullable=False)
+
+    # Cost in cents (Float for precision with cheap models/embeddings)
+    cost_cents = Column(Float, nullable=False, default=0.0)
+
+    # Optional metadata
+    tool_calls_count = Column(Integer, default=0)
+    cached = Column(Boolean, default=False)
+
+
+class LlmUsageStats(Base):
+    """Aggregated LLM usage statistics (hourly/daily)."""
+
+    __tablename__ = "llm_usage_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    period = Column(String(10), nullable=False)  # hour, day
+
+    # Aggregation keys
+    feature = Column(String(50), nullable=False, index=True)
+    model = Column(String(100))
+
+    # Totals
+    request_count = Column(Integer, default=0)
+    prompt_tokens = Column(BigInteger, default=0)
+    completion_tokens = Column(BigInteger, default=0)
+    total_tokens = Column(BigInteger, default=0)
+    total_cost_cents = Column(Float, default=0.0)

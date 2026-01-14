@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, Loader2, RotateCcw } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { api } from '../../services/api'
+import type { ChatContext } from '../../types'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -10,16 +11,17 @@ interface Message {
 
 interface ChatPanelProps {
   sessionId: string
-  context: 'general' | 'monitoring' | 'projects' | 'network' | 'actions' | 'home' | 'journal' | 'work'
+  context: ChatContext
   placeholder?: string
   model?: string
   onModelLoaded?: (model: string) => void
   onNewChat?: () => void  // Callback when user wants a new chat
+  onDataChanged?: () => void  // Callback when chat may have modified data (e.g., added contacts)
 }
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
-export default function ChatPanel({ sessionId, context, placeholder, model, onModelLoaded, onNewChat }: ChatPanelProps) {
+export default function ChatPanel({ sessionId, context, placeholder, model, onModelLoaded, onNewChat, onDataChanged }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>(() => {
     // Only load persisted messages for work context (for "Learn from Chats" feature)
     if (context === 'work') {
@@ -143,6 +145,8 @@ export default function ChatPanel({ sessionId, context, placeholder, model, onMo
       ])
     } finally {
       setIsLoading(false)
+      // Notify parent that data may have changed (e.g., contacts added via chat)
+      onDataChanged?.()
     }
   }
 
@@ -215,7 +219,7 @@ export default function ChatPanel({ sessionId, context, placeholder, model, onMo
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={placeholder || 'Type a message...'}
-            rows={1}
+            rows={4}
             className="flex-1 magnetic-input resize-none"
             disabled={isLoading}
           />

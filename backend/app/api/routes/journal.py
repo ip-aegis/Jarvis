@@ -427,3 +427,229 @@ async def get_journal_context(
     except Exception as e:
         logger.exception("context_build_failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================================
+# User Profile Endpoints
+# =========================================================================
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    nickname: Optional[str] = None
+    life_context: Optional[dict] = None
+    interests: Optional[list[str]] = None
+    goals: Optional[list[str]] = None
+    challenges: Optional[list[str]] = None
+    values: Optional[list[str]] = None
+    communication_style: Optional[str] = None
+
+
+def profile_to_response(profile) -> dict:
+    """Convert JournalUserProfile model to response dict."""
+    if not profile:
+        return None
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "nickname": profile.nickname,
+        "life_context": profile.life_context or {},
+        "interests": profile.interests or [],
+        "goals": profile.goals or [],
+        "challenges": profile.challenges or [],
+        "values": profile.values or [],
+        "communication_style": profile.communication_style,
+        "learned_facts": profile.learned_facts or [],
+        "learned_facts_count": len(profile.learned_facts or []),
+        "last_learned_at": profile.last_learned_at.isoformat() if profile.last_learned_at else None,
+        "created_at": profile.created_at.isoformat() if profile.created_at else None,
+        "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
+    }
+
+
+@router.get("/profile")
+async def get_profile(db: Session = Depends(get_db)):
+    """Get the user's journal profile."""
+    service = JournalService(db)
+    profile = service.get_profile()
+
+    if not profile:
+        return {"profile": None, "message": "No profile yet. It will be created as you chat."}
+
+    return {"profile": profile_to_response(profile)}
+
+
+@router.put("/profile")
+async def update_profile(request: ProfileUpdateRequest, db: Session = Depends(get_db)):
+    """Update the user's journal profile."""
+    service = JournalService(db)
+
+    try:
+        profile = service.update_profile(
+            name=request.name,
+            nickname=request.nickname,
+            life_context=request.life_context,
+            interests=request.interests,
+            goals=request.goals,
+            challenges=request.challenges,
+            values=request.values,
+            communication_style=request.communication_style,
+        )
+        return {"profile": profile_to_response(profile)}
+    except Exception as e:
+        logger.exception("profile_update_failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/profile/facts/{fact_id}")
+async def delete_fact(fact_id: str, db: Session = Depends(get_db)):
+    """Delete a learned fact from the profile."""
+    service = JournalService(db)
+
+    if not service.delete_fact(fact_id):
+        raise HTTPException(status_code=404, detail="Fact not found")
+
+    return {"status": "deleted", "fact_id": fact_id}
+
+
+@router.post("/profile/facts/{fact_id}/verify")
+async def verify_fact(fact_id: str, verified: bool = True, db: Session = Depends(get_db)):
+    """Mark a learned fact as verified or unverified."""
+    service = JournalService(db)
+
+    profile = service.verify_fact(fact_id, verified)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Fact not found")
+
+    return {"status": "verified" if verified else "unverified", "fact_id": fact_id}
+
+
+# =========================================================================
+# Retroactive Processing Endpoints
+# =========================================================================
+
+
+@router.post("/retroactive/process")
+async def process_retroactive(
+    limit: int = Query(100, le=500),
+    db: Session = Depends(get_db),
+):
+    """Process existing journal chat sessions retroactively.
+
+    This will:
+    1. Find all journal chat sessions that haven't been summarized
+    2. Extract facts from each session and add to user profile
+    3. Generate summaries and auto-approve them as journal entries
+    """
+    from app.services.journal_tasks import journal_processor
+
+    try:
+        results = await journal_processor.process_retroactive(limit=limit)
+        return {
+            "status": "completed",
+            "results": results,
+        }
+    except Exception as e:
+        logger.exception("retroactive_processing_failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/retroactive/status")
+async def get_retroactive_status(db: Session = Depends(get_db)):
+    """Get status of journal sessions that could be processed retroactively."""
+    from app.models import ChatSession, JournalChatSummary
+
+    # Count total journal sessions
+    total_sessions = db.query(ChatSession).filter(ChatSession.context == "journal").count()
+
+    # Count sessions with summaries
+    summarized_session_ids = (
+        db.query(JournalChatSummary.chat_session_id)
+        .filter(JournalChatSummary.chat_session_id.isnot(None))
+        .distinct()
+        .all()
+    )
+    summarized_count = len(summarized_session_ids)
+
+    # Get profile stats
+    service = JournalService(db)
+    profile = service.get_profile()
+
+    return {
+        "total_journal_sessions": total_sessions,
+        "summarized_sessions": summarized_count,
+        "pending_sessions": total_sessions - summarized_count,
+        "profile_exists": profile is not None,
+        "learned_facts_count": len(profile.learned_facts) if profile else 0,
+    }
+
+
+# =============================================================================
+# Fact Extraction Visibility
+# =============================================================================
+
+
+@router.get("/extractions/recent")
+async def get_recent_extractions(
+    limit: int = Query(50, le=200),
+    status: Optional[str] = Query(
+        None, description="Filter by status: added, duplicate, low_confidence"
+    ),
+    db: Session = Depends(get_db),
+):
+    """Get recent fact extractions for visibility into what was learned/filtered."""
+    from app.models import JournalFactExtraction
+
+    query = db.query(JournalFactExtraction).order_by(JournalFactExtraction.extracted_at.desc())
+
+    if status:
+        query = query.filter(JournalFactExtraction.status == status)
+
+    extractions = query.limit(limit).all()
+
+    return {
+        "extractions": [
+            {
+                "id": e.id,
+                "session_id": e.session_id,
+                "extracted_at": e.extracted_at.isoformat() if e.extracted_at else None,
+                "fact_text": e.fact_text,
+                "category": e.category,
+                "confidence": e.confidence,
+                "status": e.status,
+                "duplicate_of": e.duplicate_of,
+            }
+            for e in extractions
+        ],
+        "total": len(extractions),
+    }
+
+
+@router.post("/extractions/{extraction_id}/add")
+async def add_filtered_extraction(
+    extraction_id: int,
+    db: Session = Depends(get_db),
+):
+    """Manually add a filtered extraction as a learned fact."""
+    from app.models import JournalFactExtraction
+
+    extraction = db.query(JournalFactExtraction).filter_by(id=extraction_id).first()
+    if not extraction:
+        raise HTTPException(status_code=404, detail="Extraction not found")
+
+    if extraction.status == "added":
+        raise HTTPException(status_code=400, detail="This fact was already added")
+
+    service = JournalService(db)
+    service.add_learned_fact(
+        fact=extraction.fact_text,
+        category=extraction.category or "general",
+        confidence=extraction.confidence or 0.5,
+        source_session_id=extraction.session_id,
+    )
+
+    # Update extraction status
+    extraction.status = "added"
+    db.commit()
+
+    return {"status": "ok", "message": "Fact added to profile"}

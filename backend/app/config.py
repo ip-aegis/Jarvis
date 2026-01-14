@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # SearXNG
     searxng_url: str = "http://localhost:8888"
 
+    # AdGuard Home DNS
+    adguard_url: str = "http://localhost:3053"
+    adguard_username: str = "admin"
+    adguard_password: str = "jarvis123"
+
     # SSH Keys storage
     ssh_keys_path: str = "/app/ssh_keys"
 

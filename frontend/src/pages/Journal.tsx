@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Bot, Settings } from 'lucide-react'
+import { Bot, Settings, Brain, Trash2, CheckCircle, XCircle, Plus, Filter } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '../services/api'
 import ChatPanel from '../components/chat/ChatPanel'
-import type { JournalEntry, JournalStats, JournalCalendarData, JournalEntryCreate, JournalChatSummary } from '../types'
+import type { JournalEntry, JournalStats, JournalCalendarData, JournalEntryCreate, JournalChatSummary, JournalUserProfile, JournalRetroactiveStatus, JournalFactExtraction } from '../types'
 
 const MOODS = [
   { value: 'happy', label: 'Happy', emoji: '😊', color: 'bg-green-500' },
@@ -20,7 +20,7 @@ const ENERGY_LEVELS = [1, 2, 3, 4, 5]
 
 export default function Journal() {
   // Tab state
-  const [activeTab, setActiveTab] = useState<'chat' | 'entries' | 'summaries'>('chat')
+  const [activeTab, setActiveTab] = useState<'chat' | 'entries' | 'summaries' | 'profile'>('chat')
 
   // Data state
   const [entries, setEntries] = useState<JournalEntry[]>([])
@@ -33,6 +33,14 @@ export default function Journal() {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [currentModel, setCurrentModel] = useState<string | null>(null)
+
+  // Profile state
+  const [profile, setProfile] = useState<JournalUserProfile | null>(null)
+  const [retroactiveStatus, setRetroactiveStatus] = useState<JournalRetroactiveStatus | null>(null)
+  const [processingRetroactive, setProcessingRetroactive] = useState(false)
+  const [retroactiveResult, setRetroactiveResult] = useState<{ entries: number; facts: number } | null>(null)
+  const [extractions, setExtractions] = useState<JournalFactExtraction[]>([])
+  const [extractionFilter, setExtractionFilter] = useState<string>('')
 
   // Session persistence for chat
   const [sessionId, setSessionId] = useState(() => {
@@ -59,14 +67,20 @@ export default function Journal() {
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [entriesRes, statsRes, summariesRes] = await Promise.all([
+      const [entriesRes, statsRes, summariesRes, profileRes, retroRes, extractionsRes] = await Promise.all([
         api.listJournalEntries({ limit: 20 }),
         api.getJournalStats(),
         api.listPendingSummaries(),
+        api.getJournalProfile(),
+        api.getJournalRetroactiveStatus(),
+        api.getJournalExtractions({ limit: 50 }),
       ])
       setEntries(entriesRes.entries)
       setStats(statsRes)
       setPendingSummaries(summariesRes.summaries || [])
+      setProfile(profileRes.profile)
+      setRetroactiveStatus(retroRes)
+      setExtractions(extractionsRes.extractions)
     } catch (err) {
       console.error('Failed to load journal data:', err)
     }
@@ -187,6 +201,71 @@ export default function Journal() {
     }
   }
 
+  const deleteFact = async (factId: string) => {
+    try {
+      await api.deleteJournalFact(factId)
+      // Update profile locally
+      if (profile) {
+        setProfile({
+          ...profile,
+          learned_facts: profile.learned_facts.filter(f => f.id !== factId),
+          learned_facts_count: profile.learned_facts_count - 1,
+        })
+      }
+    } catch (err) {
+      console.error('Failed to delete fact:', err)
+    }
+  }
+
+  const verifyFact = async (factId: string, verified: boolean) => {
+    try {
+      await api.verifyJournalFact(factId, verified)
+      // Update profile locally
+      if (profile) {
+        setProfile({
+          ...profile,
+          learned_facts: profile.learned_facts.map(f =>
+            f.id === factId ? { ...f, verified } : f
+          ),
+        })
+      }
+    } catch (err) {
+      console.error('Failed to verify fact:', err)
+    }
+  }
+
+  const processRetroactive = async () => {
+    setProcessingRetroactive(true)
+    setRetroactiveResult(null)
+    try {
+      const result = await api.processJournalRetroactive(100)
+      setRetroactiveResult({
+        entries: result.results.entries_created,
+        facts: result.results.facts_learned,
+      })
+      // Reload data to show new entries and updated profile
+      loadData()
+    } catch (err) {
+      console.error('Failed to process retroactive:', err)
+    }
+    setProcessingRetroactive(false)
+  }
+
+  const addExtraction = async (extractionId: number) => {
+    try {
+      await api.addJournalExtraction(extractionId)
+      // Update local state
+      setExtractions(prev =>
+        prev.map(e => (e.id === extractionId ? { ...e, status: 'added' as const } : e))
+      )
+      // Reload profile to show new fact
+      const profileRes = await api.getJournalProfile()
+      setProfile(profileRes.profile)
+    } catch (err) {
+      console.error('Failed to add extraction:', err)
+    }
+  }
+
   // =============================================================================
   // Helpers
   // =============================================================================
@@ -239,12 +318,25 @@ export default function Journal() {
 
   const days = getDaysInMonth(currentDate)
 
-  const tabButtonClass = (tab: 'chat' | 'entries' | 'summaries') => `
+  const tabButtonClass = (tab: 'chat' | 'entries' | 'summaries' | 'profile') => `
     px-4 py-2 rounded-lg font-medium transition-colors
     ${activeTab === tab
       ? 'bg-primary-500 text-white'
       : 'bg-surface-700 text-gray-400 hover:text-white hover:bg-surface-600'}
   `
+
+  const getCategoryColor = (category: string) => {
+    const colors: Record<string, string> = {
+      identity: 'bg-blue-500/20 text-blue-400',
+      relationships: 'bg-pink-500/20 text-pink-400',
+      interests: 'bg-green-500/20 text-green-400',
+      goals: 'bg-yellow-500/20 text-yellow-400',
+      challenges: 'bg-orange-500/20 text-orange-400',
+      values: 'bg-purple-500/20 text-purple-400',
+      life_events: 'bg-cyan-500/20 text-cyan-400',
+    }
+    return colors[category] || 'bg-gray-500/20 text-gray-400'
+  }
 
   // =============================================================================
   // Render
@@ -281,6 +373,15 @@ export default function Journal() {
                   </span>
                 )}
               </button>
+              <button onClick={() => setActiveTab('profile')} className={tabButtonClass('profile')}>
+                <Brain className="w-4 h-4 inline mr-1" />
+                Profile
+                {profile && profile.learned_facts_count > 0 && (
+                  <span className="ml-2 px-1.5 py-0.5 text-xs bg-purple-500 text-white rounded-full">
+                    {profile.learned_facts_count}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -314,9 +415,6 @@ export default function Journal() {
 
       {/* Tab Content */}
       {activeTab === 'chat' ? (
-        // =======================================================================
-        // CHAT TAB - Full width ChatPanel
-        // =======================================================================
         <div className="flex-1 flex flex-col overflow-hidden">
           <ChatPanel
             sessionId={sessionId}
@@ -327,9 +425,6 @@ export default function Journal() {
           />
         </div>
       ) : activeTab === 'entries' ? (
-        // =======================================================================
-        // ENTRIES TAB - Calendar + Recent Entries
-        // =======================================================================
         <div className="flex-1 overflow-auto p-6">
           {/* Stats */}
           {stats && (
@@ -481,10 +576,7 @@ export default function Journal() {
             </div>
           </div>
         </div>
-      ) : (
-        // =======================================================================
-        // SUMMARIES TAB - Pending summaries + Insights
-        // =======================================================================
+      ) : activeTab === 'summaries' ? (
         <div className="flex-1 overflow-auto p-6">
           <div className="max-w-4xl mx-auto space-y-6">
             {/* Pending Summaries */}
@@ -603,7 +695,278 @@ export default function Journal() {
             )}
           </div>
         </div>
-      )}
+      ) : activeTab === 'profile' ? (
+        <div className="flex-1 overflow-auto p-6">
+          <div className="max-w-4xl mx-auto space-y-6">
+            {/* Retroactive Processing */}
+            {retroactiveStatus && retroactiveStatus.pending_sessions > 0 && (
+              <div className="magnetic-card p-4 border-l-4 border-yellow-500">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-white mb-1">Process Past Chats</h3>
+                    <p className="text-gray-400 text-sm">
+                      You have {retroactiveStatus.pending_sessions} unprocessed journal chat sessions.
+                      Processing will extract what I've learned about you and create journal entries.
+                    </p>
+                    {retroactiveResult && (
+                      <div className="mt-2 text-sm text-green-400">
+                        Created {retroactiveResult.entries} entries and learned {retroactiveResult.facts} facts!
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={processRetroactive}
+                    disabled={processingRetroactive}
+                    className="magnetic-button-primary flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {processingRetroactive ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Brain className="w-4 h-4" />
+                        Process Now
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Profile Summary */}
+            {profile ? (
+              <div className="magnetic-card p-4">
+                <h2 className="text-lg font-semibold text-white mb-4">What I Know About You</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                  {profile.name && (
+                    <div className="p-3 bg-surface-600 rounded-lg">
+                      <div className="text-sm text-gray-400">Name</div>
+                      <div className="text-white">{profile.name} {profile.nickname && `("${profile.nickname}")`}</div>
+                    </div>
+                  )}
+                  {profile.interests && profile.interests.length > 0 && (
+                    <div className="p-3 bg-surface-600 rounded-lg">
+                      <div className="text-sm text-gray-400">Interests</div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {profile.interests.slice(0, 5).map(interest => (
+                          <span key={interest} className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">
+                            {interest}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {profile.goals && profile.goals.length > 0 && (
+                    <div className="p-3 bg-surface-600 rounded-lg">
+                      <div className="text-sm text-gray-400">Goals</div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {profile.goals.slice(0, 3).map(goal => (
+                          <span key={goal} className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">
+                            {goal}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {profile.values && profile.values.length > 0 && (
+                    <div className="p-3 bg-surface-600 rounded-lg">
+                      <div className="text-sm text-gray-400">Values</div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {profile.values.slice(0, 5).map(value => (
+                          <span key={value} className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded">
+                            {value}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stats */}
+                <div className="grid grid-cols-3 gap-4 text-center border-t border-surface-600 pt-4">
+                  <div>
+                    <div className="text-2xl font-bold text-primary-500">{profile.learned_facts_count}</div>
+                    <div className="text-sm text-gray-400">Facts Learned</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-green-500">
+                      {profile.learned_facts.filter(f => f.verified).length}
+                    </div>
+                    <div className="text-sm text-gray-400">Verified</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-gray-400">
+                      {profile.last_learned_at ? new Date(profile.last_learned_at).toLocaleDateString() : 'Never'}
+                    </div>
+                    <div className="text-sm text-gray-400">Last Learned</div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="magnetic-card p-8 text-center">
+                <Brain className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-white mb-2">No Profile Yet</h3>
+                <p className="text-gray-400">
+                  Start chatting in the Journal tab and I'll learn about you over time!
+                </p>
+              </div>
+            )}
+
+            {/* Learned Facts */}
+            {profile && profile.learned_facts.length > 0 && (
+              <div className="magnetic-card p-4">
+                <h2 className="text-lg font-semibold text-white mb-4">Learned Facts</h2>
+                <p className="text-gray-400 text-sm mb-4">
+                  These are things I've learned from our conversations. You can verify or remove incorrect ones.
+                </p>
+                <div className="space-y-2">
+                  {profile.learned_facts.map(fact => (
+                    <div
+                      key={fact.id}
+                      className={`p-3 rounded-lg flex items-start justify-between gap-3 ${
+                        fact.verified ? 'bg-green-500/10 border border-green-500/30' : 'bg-surface-600'
+                      }`}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-xs px-2 py-0.5 rounded ${getCategoryColor(fact.category)}`}>
+                            {fact.category}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {Math.round(fact.confidence * 100)}% confident
+                          </span>
+                          {fact.verified && (
+                            <span className="text-xs text-green-400 flex items-center gap-1">
+                              <CheckCircle className="w-3 h-3" /> Verified
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-gray-300 text-sm">{fact.fact}</p>
+                        <div className="text-xs text-gray-500 mt-1">
+                          Learned {new Date(fact.learned_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {!fact.verified ? (
+                          <button
+                            onClick={() => verifyFact(fact.id, true)}
+                            className="p-1.5 text-gray-400 hover:text-green-400 transition-colors"
+                            title="Verify this fact"
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => verifyFact(fact.id, false)}
+                            className="p-1.5 text-green-400 hover:text-gray-400 transition-colors"
+                            title="Unverify this fact"
+                          >
+                            <XCircle className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => deleteFact(fact.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-400 transition-colors"
+                          title="Delete this fact"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recent Extractions */}
+            {extractions.length > 0 && (
+              <div className="magnetic-card p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold text-white">Recent Extractions</h2>
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4 text-gray-400" />
+                    <select
+                      value={extractionFilter}
+                      onChange={(e) => setExtractionFilter(e.target.value)}
+                      className="magnetic-input text-sm py-1"
+                    >
+                      <option value="">All</option>
+                      <option value="added">Added</option>
+                      <option value="duplicate">Duplicates</option>
+                      <option value="low_confidence">Low Confidence</option>
+                    </select>
+                  </div>
+                </div>
+                <p className="text-gray-400 text-sm mb-4">
+                  Facts extracted from your conversations. Filtered facts can be manually added.
+                </p>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {extractions
+                    .filter(e => !extractionFilter || e.status === extractionFilter)
+                    .map(extraction => (
+                      <div
+                        key={extraction.id}
+                        className={`p-3 rounded-lg flex items-start justify-between gap-3 ${
+                          extraction.status === 'added'
+                            ? 'bg-green-500/10 border border-green-500/30'
+                            : extraction.status === 'duplicate'
+                            ? 'bg-yellow-500/10 border border-yellow-500/30'
+                            : 'bg-red-500/10 border border-red-500/30'
+                        }`}
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                              extraction.status === 'added'
+                                ? 'bg-green-500/20 text-green-400'
+                                : extraction.status === 'duplicate'
+                                ? 'bg-yellow-500/20 text-yellow-400'
+                                : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {extraction.status === 'added' ? 'Added' : extraction.status === 'duplicate' ? 'Duplicate' : 'Low Confidence'}
+                            </span>
+                            {extraction.category && (
+                              <span className={`text-xs px-2 py-0.5 rounded ${getCategoryColor(extraction.category)}`}>
+                                {extraction.category}
+                              </span>
+                            )}
+                            {extraction.confidence && (
+                              <span className="text-xs text-gray-500">
+                                {Math.round(extraction.confidence * 100)}%
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-gray-300 text-sm">{extraction.fact_text}</p>
+                          {extraction.duplicate_of && (
+                            <p className="text-xs text-yellow-400/70 mt-1">
+                              Matches: "{extraction.duplicate_of}"
+                            </p>
+                          )}
+                          {extraction.extracted_at && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              {new Date(extraction.extracted_at).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                        {extraction.status !== 'added' && (
+                          <button
+                            onClick={() => addExtraction(extraction.id)}
+                            className="p-1.5 text-gray-400 hover:text-green-400 transition-colors"
+                            title="Add this fact to profile"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* Entry Editor Modal */}
       {isEditorOpen && (

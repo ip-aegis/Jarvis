@@ -282,7 +282,14 @@ async def update_account_handler(
 
         if add_contact:
             contacts = account.contacts or []
-            contacts.append(add_contact)
+            # Ensure contacts is a flat list (fix any nested arrays)
+            if contacts and isinstance(contacts[0], list):
+                contacts = contacts[0]
+            # Handle case where LLM passes array instead of single contact
+            if isinstance(add_contact, list):
+                contacts.extend(add_contact)
+            else:
+                contacts.append(add_contact)
 
         if add_alias:
             aliases = account.aliases or []

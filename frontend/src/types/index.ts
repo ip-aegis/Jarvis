@@ -266,7 +266,7 @@ export interface ScheduledAction {
   created_at?: string
 }
 
-export type ChatContext = 'general' | 'monitoring' | 'projects' | 'network' | 'actions' | 'home' | 'journal' | 'work'
+export type ChatContext = 'general' | 'monitoring' | 'projects' | 'network' | 'actions' | 'home' | 'journal' | 'work' | 'dns'
 
 // =============================================================================
 // Home Automation types
@@ -452,6 +452,80 @@ export interface JournalStats {
   mood_distribution: Record<string, number>
   source_distribution: Record<string, number>
   pending_summaries: number
+}
+
+export interface JournalLearnedFact {
+  id: string
+  fact: string
+  category: 'identity' | 'relationships' | 'interests' | 'goals' | 'challenges' | 'values' | 'life_events'
+  confidence: number
+  source_session_id?: string
+  learned_at: string
+  verified: boolean
+}
+
+export interface JournalUserProfile {
+  id: number | null
+  name: string | null
+  nickname: string | null
+  life_context: Record<string, unknown>
+  interests: string[]
+  goals: string[]
+  challenges: string[]
+  values: string[]
+  communication_style: string | null
+  learned_facts: JournalLearnedFact[]
+  learned_facts_count: number
+  last_learned_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface JournalProfileUpdate {
+  name?: string
+  nickname?: string
+  life_context?: Record<string, unknown>
+  interests?: string[]
+  goals?: string[]
+  challenges?: string[]
+  values?: string[]
+  communication_style?: string
+}
+
+export interface JournalRetroactiveStatus {
+  total_journal_sessions: number
+  summarized_sessions: number
+  pending_sessions: number
+  profile_exists: boolean
+  learned_facts_count: number
+}
+
+export interface JournalRetroactiveResult {
+  status: string
+  results: {
+    total_sessions: number
+    unprocessed_sessions: number
+    processed: number
+    entries_created: number
+    facts_learned: number
+    errors: number
+  }
+}
+
+export interface JournalFactExtraction {
+  id: number
+  session_id: string | null
+  extracted_at: string | null
+  fact_text: string
+  category: string | null
+  confidence: number | null
+  status: 'added' | 'duplicate' | 'low_confidence'
+  duplicate_of: string | null
+}
+
+export interface JournalExtractionsResponse {
+  extractions: JournalFactExtraction[]
+  total: number
 }
 
 // =============================================================================
@@ -662,4 +736,244 @@ export interface ModelDefaults {
   home: string
   journal: string
   work: string
+  dns: string
+}
+
+// =============================================================================
+// DNS Security Types
+// =============================================================================
+
+export type DnsBlocklistCategory = 'ads' | 'tracking' | 'malware' | 'phishing' | 'adult'
+export type DnsRuleType = 'block' | 'allow' | 'rewrite'
+export type DnsQueryStatus = 'allowed' | 'blocked' | 'filtered'
+
+export interface DnsConfig {
+  enabled: boolean
+  upstream_dns: string[]
+  bootstrap_dns: string[]
+  dnssec_enabled: boolean
+  doh_enabled: boolean
+  dot_enabled: boolean
+  filtering_enabled: boolean
+  safe_browsing: boolean
+  parental_control: boolean
+  cache_size: number
+  cache_ttl_min: number
+  cache_ttl_max: number
+}
+
+export interface DnsStatus {
+  running: boolean
+  dns_address: string
+  dns_port: number
+  protection_enabled: boolean
+  version: string
+  processor_status: {
+    running: boolean
+    last_sync: string | null
+    last_stats: string | null
+    last_blocklist_update: string | null
+  }
+}
+
+export interface DnsBlocklist {
+  id: number
+  name: string
+  url: string
+  category: DnsBlocklistCategory | null
+  enabled: boolean
+  rules_count: number
+  last_updated: string | null
+}
+
+export interface DnsCustomRule {
+  id: number
+  rule_type: DnsRuleType
+  domain: string
+  answer: string | null
+  comment: string | null
+  enabled: boolean
+  created_at: string
+}
+
+export interface DnsRewrite {
+  id: number
+  domain: string
+  answer: string
+  comment: string | null
+  enabled: boolean
+  created_at: string | null
+}
+
+export interface DnsClient {
+  id: number
+  client_id: string
+  name: string | null
+  ip_addresses: string[]
+  mac_address: string | null
+  use_global_settings: boolean
+  filtering_enabled: boolean
+  safe_browsing: boolean | null
+  parental_control: boolean | null
+  blocked_services: string[] | null
+  queries_count: number
+  blocked_count: number
+  last_seen: string | null
+}
+
+export interface DnsQueryLogEntry {
+  timestamp: string
+  client_ip: string
+  client_name: string | null
+  domain: string
+  query_type: string
+  status: DnsQueryStatus
+  block_reason: string | null
+  response_time_ms: number
+  cached: boolean
+  upstream: string | null
+}
+
+export interface DnsStats {
+  total_queries: number
+  blocked_queries: number
+  blocked_percentage: number
+  cached_queries: number
+  avg_response_time: number
+  top_domains: Array<{ domain: string; count: number }>
+  top_blocked: Array<{ domain: string; count: number; reason?: string }>
+  top_clients: Array<{ client: string; count: number }>
+  queries_over_time: number[]
+  blocked_over_time: number[]
+}
+
+export interface DnsAnomaly {
+  type: 'possible_dga' | 'possible_tunneling'
+  client_ip: string
+  domains?: string[]
+  domain?: string
+  count?: number
+  query_count?: number
+  severity: 'low' | 'medium' | 'high'
+}
+
+export interface DnsLookupResult {
+  domain: string
+  is_blocked: boolean
+  is_allowed: boolean
+  in_custom_rules: boolean
+  active_filters_count: number
+}
+
+// DNS Analytics Types
+export type AlertSeverity = 'low' | 'medium' | 'high' | 'critical'
+export type AlertType = 'dga' | 'tunneling' | 'fast_flux' | 'behavioral' | 'reputation'
+export type AlertStatus = 'open' | 'acknowledged' | 'resolved' | 'false_positive'
+
+export interface DnsSecurityAlert {
+  id: number
+  alert_id: string
+  timestamp: string
+  alert_type: AlertType
+  severity: AlertSeverity
+  client_ip: string | null
+  domain: string | null
+  domains?: string[]
+  title: string
+  description: string | null
+  raw_data?: Record<string, unknown>
+  llm_analysis: string | null
+  remediation: string | null
+  confidence: number | null
+  status: AlertStatus
+  acknowledged_at: string | null
+  acknowledged_by: string | null
+  resolved_at: string | null
+  resolution_notes: string | null
+}
+
+export interface DnsClientProfile {
+  client_id: string
+  device_type_inference: string | null
+  device_type_confidence: number | null
+  normal_query_rate_per_hour: number | null
+  query_rate_std_dev: number | null
+  baseline_generated_at: string | null
+  baseline_data_points: number
+  anomaly_sensitivity: number
+}
+
+export interface DnsDomainReputation {
+  domain: string
+  reputation_score: number
+  entropy_score: number
+  category: string | null
+  category_confidence: number | null
+  threat_indicators: {
+    dga_score: number
+    tunneling_score: number
+    consonant_ratio?: number
+    digit_ratio?: number
+  }
+  first_seen: string | null
+  last_seen: string | null
+  query_count: number
+}
+
+export interface DnsClientRiskAssessment {
+  client_ip: string
+  client_name: string | null
+  risk_level: 'low' | 'medium' | 'high'
+  risk_score: number
+  risk_factors: string[]
+  device_type: string | null
+  device_confidence: number | null
+  has_baseline: boolean
+  baseline_age_hours: number | null
+  recent_alert_count: number
+}
+
+export interface DnsBehavioralAnomaly {
+  type: string
+  severity: 'low' | 'medium' | 'high'
+  description: string
+  current_rate?: number
+  expected_rate?: number
+  deviation_std?: number
+  new_domain_count?: number
+  sample_domains?: string[]
+}
+
+export interface DnsDetectionResult {
+  analysis_window_hours: number
+  total_queries_analyzed: number
+  summary: {
+    dga_count: number
+    tunneling_count: number
+    fast_flux_count: number
+    low_reputation_count: number
+    total_threats: number
+  }
+  dga_detections: Array<{
+    domain: string
+    is_dga: boolean
+    confidence: number
+    metrics: Record<string, number>
+  }>
+  tunneling_detections: Array<{
+    base_domain: string
+    client_ip: string
+    confidence: number
+    indicators: Record<string, unknown>
+  }>
+  fast_flux_detections: Array<{
+    domain: string
+    confidence: number
+    unique_ip_count: number
+  }>
+  low_reputation_domains: Array<{
+    domain: string
+    reputation_score: number
+    category: string
+  }>
 }

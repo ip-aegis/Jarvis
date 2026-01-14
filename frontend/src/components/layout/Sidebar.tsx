@@ -12,6 +12,8 @@ import {
   Home,
   BookOpen,
   Briefcase,
+  Shield,
+  BarChart3,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -24,9 +26,11 @@ const navigation = [
   { name: 'Servers', href: '/servers', icon: Server },
   { name: 'Monitoring', href: '/monitoring', icon: Activity },
   { name: 'Network', href: '/network', icon: Network },
+  { name: 'DNS', href: '/dns', icon: Shield },
   { name: 'Alpha', href: '/alpha', icon: Cpu },
   { name: 'Projects', href: '/projects', icon: FolderGit2 },
   { name: 'Actions', href: '/actions', icon: History },
+  { name: 'Usage', href: '/usage', icon: BarChart3 },
 ]
 
 export default function Sidebar() {

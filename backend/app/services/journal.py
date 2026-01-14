@@ -1,4 +1,6 @@
 import json
+import math
+import uuid as uuid_module
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID
@@ -10,10 +12,28 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.models import ChatMessage, ChatSession, JournalChatSummary, JournalEntry
+from app.models import (
+    ChatMessage,
+    ChatSession,
+    JournalChatSummary,
+    JournalEntry,
+    JournalFactExtraction,
+    JournalUserProfile,
+)
+from app.services.llm_usage import log_llm_usage
 from app.services.openai_service import OpenAIService
 
 logger = get_logger(__name__)
+
+
+def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
+    """Calculate cosine similarity between two vectors."""
+    dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=False))
+    magnitude1 = math.sqrt(sum(a * a for a in vec1))
+    magnitude2 = math.sqrt(sum(b * b for b in vec2))
+    if magnitude1 == 0 or magnitude2 == 0:
+        return 0.0
+    return dot_product / (magnitude1 * magnitude2)
 
 
 class JournalService:
@@ -189,7 +209,16 @@ class JournalService:
         try:
             # Create text for embedding (title + content)
             text_to_embed = f"{entry.title or ''}\n{entry.content}".strip()
-            embedding = await self.openai.generate_embedding(text_to_embed)
+            embedding, usage = await self.openai.generate_embedding_with_usage(text_to_embed)
+
+            # Log usage
+            log_llm_usage(
+                feature="journal",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="entry_embedding",
+            )
 
             # Store embedding using raw SQL (pgvector)
             self.db.execute(
@@ -211,7 +240,17 @@ class JournalService:
         """Search journal entries using semantic similarity."""
         try:
             # Generate embedding for query
-            query_embedding = await self.openai.generate_embedding(query)
+            query_embedding, usage = await self.openai.generate_embedding_with_usage(query)
+
+            # Log usage
+            log_llm_usage(
+                feature="journal",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="semantic_search",
+            )
+
             embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
             # Perform cosine similarity search using pgvector
@@ -378,7 +417,18 @@ Respond in JSON format:
         ]
 
         try:
-            response = await self.openai.chat(summary_prompt)
+            response, usage = await self.openai.chat_with_usage(summary_prompt)
+
+            # Log usage
+            log_llm_usage(
+                feature="journal",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="generate_summary",
+                session_id=session_id,
+            )
+
             data = json.loads(response)
 
             # Create summary record
@@ -387,8 +437,8 @@ Respond in JSON format:
                 summary_text=data.get("summary", ""),
                 key_topics=data.get("key_topics", []),
                 sentiment=data.get("sentiment", "neutral"),
-                model_used=self.openai.model,
-                tokens_used=self._count_tokens(conversation) + self._count_tokens(response),
+                model_used=usage.model,
+                tokens_used=usage.total_tokens,
                 status="generated",
             )
             self.db.add(summary)
@@ -501,3 +551,566 @@ Respond in JSON format:
             .filter_by(status="generated")
             .count(),
         }
+
+    # =========================================================================
+    # User Profile Management
+    # =========================================================================
+
+    def get_profile(self) -> Optional[JournalUserProfile]:
+        """Get the user's journal profile (singleton)."""
+        return self.db.query(JournalUserProfile).first()
+
+    def get_or_create_profile(self) -> JournalUserProfile:
+        """Get existing profile or create a new empty one."""
+        profile = self.get_profile()
+        if not profile:
+            profile = JournalUserProfile(
+                learned_facts=[],
+                life_context={},
+                interests=[],
+                goals=[],
+                challenges=[],
+                values=[],
+            )
+            self.db.add(profile)
+            self.db.commit()
+            self.db.refresh(profile)
+        return profile
+
+    def update_profile(
+        self,
+        name: Optional[str] = None,
+        nickname: Optional[str] = None,
+        life_context: Optional[dict] = None,
+        interests: Optional[list[str]] = None,
+        goals: Optional[list[str]] = None,
+        challenges: Optional[list[str]] = None,
+        values: Optional[list[str]] = None,
+        communication_style: Optional[str] = None,
+    ) -> JournalUserProfile:
+        """Update profile fields."""
+        profile = self.get_or_create_profile()
+
+        if name is not None:
+            profile.name = name
+        if nickname is not None:
+            profile.nickname = nickname
+        if life_context is not None:
+            profile.life_context = life_context
+        if interests is not None:
+            profile.interests = interests
+        if goals is not None:
+            profile.goals = goals
+        if challenges is not None:
+            profile.challenges = challenges
+        if values is not None:
+            profile.values = values
+        if communication_style is not None:
+            profile.communication_style = communication_style
+
+        profile.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(profile)
+        return profile
+
+    def add_learned_fact(
+        self,
+        fact: str,
+        category: str,
+        confidence: float = 0.8,
+        source_session_id: Optional[str] = None,
+    ) -> JournalUserProfile:
+        """Add a new learned fact to the profile."""
+        profile = self.get_or_create_profile()
+        facts = profile.learned_facts or []
+
+        new_fact = {
+            "id": str(uuid_module.uuid4()),
+            "fact": fact,
+            "category": category,
+            "confidence": confidence,
+            "source_session_id": source_session_id,
+            "learned_at": datetime.utcnow().isoformat(),
+            "verified": False,
+        }
+        facts.append(new_fact)
+
+        profile.learned_facts = facts
+        profile.last_learned_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(profile)
+        return profile
+
+    def delete_fact(self, fact_id: str) -> bool:
+        """Delete a learned fact."""
+        profile = self.get_profile()
+        if not profile:
+            return False
+
+        facts = profile.learned_facts or []
+        original_len = len(facts)
+        facts = [f for f in facts if f.get("id") != fact_id]
+
+        if len(facts) == original_len:
+            return False
+
+        profile.learned_facts = facts
+        self.db.commit()
+        return True
+
+    def verify_fact(self, fact_id: str, verified: bool = True) -> Optional[JournalUserProfile]:
+        """Mark a learned fact as verified or unverified."""
+        profile = self.get_profile()
+        if not profile:
+            return None
+
+        facts = profile.learned_facts or []
+        for fact in facts:
+            if fact.get("id") == fact_id:
+                fact["verified"] = verified
+                break
+
+        profile.learned_facts = facts
+        self.db.commit()
+        self.db.refresh(profile)
+        return profile
+
+    # =========================================================================
+    # Learning from Conversations
+    # =========================================================================
+
+    async def extract_facts_from_messages(
+        self,
+        messages: list[dict[str, str]],
+        session_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Extract user facts from conversation messages using LLM."""
+        if not messages:
+            return []
+
+        # Include FULL conversation - both user messages AND assistant responses
+        conversation_text = "\n".join(
+            [f"{m.get('role', 'user').title()}: {m.get('content', '')}" for m in messages]
+        )
+
+        prompt = [
+            {
+                "role": "system",
+                "content": """You are a personal fact extractor. Extract EVERY fact about the user from this conversation.
+
+## EXTRACTION RULES - BE AGGRESSIVE
+
+1. **Extract EVERYTHING mentioned** - If the user mentions ANY of the following, extract it:
+   - Names of people (family, friends, coworkers, anyone)
+   - Relationships (brother, sister, wife, husband, child, parent, friend, pet)
+   - Sports teams they follow or play for
+   - Favorite foods, restaurants, activities
+   - Where they live, work, or have lived
+   - Their job, role, or profession
+   - Hobbies, interests, games they play
+   - Health conditions, feelings, emotional states
+   - Opinions, preferences, likes, dislikes
+   - Goals, dreams, aspirations
+   - Daily routines, schedules
+   - Important dates, events, milestones
+
+2. **Confidence scoring** - Use these guidelines:
+   - 0.9-1.0: Explicitly stated facts ("My brother John...", "I live in...")
+   - 0.7-0.9: Clearly implied facts ("We went to John's game" implies John plays sports)
+   - 0.5-0.7: Reasonable inferences ("I was exhausted" suggests possible sleep/health issue)
+   - 0.4-0.5: Weak inferences (only use for very uncertain deductions)
+
+3. **Be specific** - Include names, details, specifics when mentioned:
+   - BAD: "Has a brother"
+   - GOOD: "Has a brother named John who plays baseball"
+
+## CATEGORIES
+- identity: name, age, location, job, physical traits
+- relationships: family, friends, pets, coworkers (INCLUDE NAMES)
+- interests: hobbies, sports teams, games, entertainment, food preferences
+- goals: aspirations, things they want to achieve
+- challenges: struggles, health issues, obstacles, stressors
+- values: beliefs, principles, priorities
+- life_events: milestones, significant happenings, daily events
+
+## OUTPUT FORMAT
+Return a JSON array. Each fact:
+- "fact": Specific fact with details (include names!)
+- "category": One of the categories above
+- "confidence": 0.4 to 1.0
+
+## EXAMPLES
+[
+  {"fact": "Has a brother named John who plays baseball", "category": "relationships", "confidence": 0.95},
+  {"fact": "Follows the Chicago Cubs", "category": "interests", "confidence": 0.9},
+  {"fact": "Wife's name is Sarah", "category": "relationships", "confidence": 0.95},
+  {"fact": "Works as a software engineer", "category": "identity", "confidence": 0.9},
+  {"fact": "Enjoys playing video games, especially RPGs", "category": "interests", "confidence": 0.85},
+  {"fact": "Feeling stressed about work deadlines", "category": "challenges", "confidence": 0.8},
+  {"fact": "Lives in the Chicago area", "category": "identity", "confidence": 0.85},
+  {"fact": "Has a dog named Buddy", "category": "relationships", "confidence": 0.95},
+  {"fact": "Trying to exercise more regularly", "category": "goals", "confidence": 0.8}
+]
+
+IMPORTANT: Extract MORE facts rather than fewer. It's better to capture something that might be filtered later than to miss important information. Return [] only if truly no personal information is present.""",
+            },
+            {
+                "role": "user",
+                "content": f"Extract ALL personal facts about the user from this journal conversation. Be thorough - extract every name, relationship, interest, and detail mentioned:\n\n{conversation_text}",
+            },
+        ]
+
+        try:
+            response, usage = await self.openai.chat_with_usage(prompt, model="gpt-4o-mini")
+
+            # Log usage
+            log_llm_usage(
+                feature="journal",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="extract_facts",
+                session_id=session_id,
+            )
+
+            logger.info(
+                "fact_extraction_llm_response",
+                session_id=session_id,
+                response_length=len(response) if response else 0,
+                response_preview=response[:200] if response else "empty",
+            )
+            # Handle potential markdown code blocks in response
+            response_text = response.strip()
+            if response_text.startswith("```"):
+                # Remove markdown code block
+                lines = response_text.split("\n")
+                response_text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+
+            facts = json.loads(response_text)
+            if not isinstance(facts, list):
+                logger.warning("fact_extraction_not_list", response_type=type(facts).__name__)
+                return []
+
+            logger.info(
+                "facts_extracted",
+                session_id=session_id,
+                count=len(facts),
+                facts_preview=[f.get("fact", "")[:50] for f in facts[:3]] if facts else [],
+            )
+
+            # Add session tracking
+            for fact in facts:
+                fact["source_session_id"] = session_id
+
+            return facts
+        except Exception as e:
+            logger.error("fact_extraction_failed", error=str(e), session_id=session_id)
+            return []
+
+    async def learn_from_messages(
+        self,
+        messages: list[dict[str, str]],
+        session_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Extract and store facts from conversation messages."""
+        extracted = await self.extract_facts_from_messages(messages, session_id)
+
+        added_facts = []
+        filtered_facts = []
+        profile = self.get_profile()
+        existing_facts = profile.learned_facts if profile else []
+
+        for fact_data in extracted:
+            fact_text = fact_data.get("fact", "")
+            confidence = fact_data.get("confidence", 0)
+            category = fact_data.get("category", "general")
+
+            # Skip low-confidence facts (threshold lowered to 0.4)
+            if confidence < 0.4:
+                self._record_extraction(
+                    session_id,
+                    fact_text,
+                    category,
+                    confidence,
+                    status="low_confidence",
+                    duplicate_of=None,
+                )
+                filtered_facts.append(
+                    {"fact": fact_text, "reason": "low_confidence", "confidence": confidence}
+                )
+                continue
+
+            # Check for semantic duplicates using embeddings
+            is_dup, dup_match = await self._is_semantic_duplicate(fact_text, existing_facts)
+
+            if is_dup:
+                self._record_extraction(
+                    session_id,
+                    fact_text,
+                    category,
+                    confidence,
+                    status="duplicate",
+                    duplicate_of=dup_match,
+                )
+                filtered_facts.append(
+                    {"fact": fact_text, "reason": "duplicate", "matched": dup_match}
+                )
+                continue
+
+            # Add the fact
+            self.add_learned_fact(
+                fact=fact_text,
+                category=category,
+                confidence=confidence,
+                source_session_id=session_id,
+            )
+            self._record_extraction(
+                session_id, fact_text, category, confidence, status="added", duplicate_of=None
+            )
+            added_facts.append(fact_data)
+
+            # Update existing_facts for subsequent duplicate checks in this batch
+            existing_facts = self.get_profile().learned_facts if self.get_profile() else []
+
+        logger.info(
+            "learning_complete",
+            session_id=session_id,
+            extracted=len(extracted),
+            added=len(added_facts),
+            filtered=len(filtered_facts),
+        )
+
+        return {
+            "extracted": len(extracted),
+            "added": len(added_facts),
+            "filtered": len(filtered_facts),
+            "facts": added_facts,
+            "filtered_details": filtered_facts,
+        }
+
+    async def _is_semantic_duplicate(
+        self,
+        new_fact: str,
+        existing_facts: list[dict],
+        similarity_threshold: float = 0.85,
+    ) -> tuple[bool, Optional[str]]:
+        """Check if a fact is semantically similar to existing facts using embeddings."""
+        if not existing_facts:
+            return False, None
+
+        try:
+            # Get embedding for the new fact
+            new_embedding, usage = await self.openai.generate_embedding_with_usage(new_fact)
+
+            # Log usage
+            log_llm_usage(
+                feature="journal",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="fact_dedup_embedding",
+            )
+
+            # Compare against existing facts
+            for existing in existing_facts:
+                existing_text = existing.get("fact", "")
+                existing_embedding = existing.get("embedding")
+
+                # Generate embedding if not cached
+                if not existing_embedding:
+                    existing_embedding, emb_usage = await self.openai.generate_embedding_with_usage(
+                        existing_text
+                    )
+
+                    # Log usage
+                    log_llm_usage(
+                        feature="journal",
+                        model=emb_usage.model,
+                        prompt_tokens=emb_usage.prompt_tokens,
+                        completion_tokens=emb_usage.completion_tokens,
+                        function_name="fact_dedup_embedding",
+                    )
+
+                similarity = cosine_similarity(new_embedding, existing_embedding)
+                if similarity >= similarity_threshold:
+                    logger.debug(
+                        "semantic_duplicate_found",
+                        new_fact=new_fact[:50],
+                        matched=existing_text[:50],
+                        similarity=round(similarity, 3),
+                    )
+                    return True, existing_text
+
+            return False, None
+
+        except Exception as e:
+            logger.warning("semantic_duplicate_check_failed", error=str(e))
+            # Fall back to simple substring matching
+            for existing in existing_facts:
+                existing_text = existing.get("fact", "").lower()
+                if new_fact.lower() in existing_text or existing_text in new_fact.lower():
+                    return True, existing.get("fact")
+            return False, None
+
+    def _record_extraction(
+        self,
+        session_id: Optional[str],
+        fact_text: str,
+        category: str,
+        confidence: float,
+        status: str,
+        duplicate_of: Optional[str],
+    ) -> None:
+        """Record a fact extraction for visibility/debugging."""
+        try:
+            extraction = JournalFactExtraction(
+                session_id=session_id,
+                fact_text=fact_text,
+                category=category,
+                confidence=confidence,
+                status=status,
+                duplicate_of=duplicate_of,
+            )
+            self.db.add(extraction)
+            self.db.commit()
+        except Exception as e:
+            logger.warning("record_extraction_failed", error=str(e))
+            self.db.rollback()
+
+    # =========================================================================
+    # Profile Context Building for Chat Injection
+    # =========================================================================
+
+    def build_profile_context(self) -> str:
+        """Build profile context for injection into system prompt."""
+        profile = self.get_profile()
+        if not profile:
+            return ""
+
+        parts = ["## About You (Learned from our conversations)\n"]
+
+        # Identity
+        identity_parts = []
+        if profile.name:
+            identity_parts.append(profile.name)
+        if profile.nickname:
+            identity_parts.append(f'(goes by "{profile.nickname}")')
+        if identity_parts:
+            parts.append(f"**Name:** {' '.join(identity_parts)}")
+
+        # Life context
+        if profile.life_context:
+            ctx = profile.life_context
+            if ctx.get("relationships"):
+                parts.append("\n**Key People:**")
+                for rel in ctx["relationships"][:5]:
+                    if isinstance(rel, dict):
+                        name = rel.get("name", "")
+                        relation = rel.get("relation", "")
+                        parts.append(f"- {name}" + (f" ({relation})" if relation else ""))
+                    else:
+                        parts.append(f"- {rel}")
+            if ctx.get("pets"):
+                parts.append(f"\n**Pets:** {', '.join(ctx['pets'][:5])}")
+            if ctx.get("living_situation"):
+                parts.append(f"\n**Living Situation:** {ctx['living_situation']}")
+
+        # Interests
+        if profile.interests:
+            interests_str = ", ".join(profile.interests[:8])
+            parts.append(f"\n**Interests:** {interests_str}")
+
+        # Goals
+        if profile.goals:
+            parts.append("\n**Personal Goals:**")
+            for i, goal in enumerate(profile.goals[:5], 1):
+                parts.append(f"{i}. {goal}")
+
+        # Challenges
+        if profile.challenges:
+            parts.append("\n**Current Challenges:**")
+            for challenge in profile.challenges[:3]:
+                parts.append(f"- {challenge}")
+
+        # Values
+        if profile.values:
+            values_str = ", ".join(profile.values[:6])
+            parts.append(f"\n**Values:** {values_str}")
+
+        # Communication style
+        if profile.communication_style:
+            parts.append(f"\n**Communication Style:** {profile.communication_style}")
+
+        # Include some learned facts
+        if profile.learned_facts:
+            verified_facts = [f for f in profile.learned_facts if f.get("verified")]
+            high_confidence = [f for f in profile.learned_facts if f.get("confidence", 0) >= 0.85]
+            facts_to_show = verified_facts[:3] or high_confidence[:3]
+            if facts_to_show:
+                parts.append("\n**Things I Remember:**")
+                for fact in facts_to_show:
+                    parts.append(f"- {fact.get('fact', '')}")
+
+        # Only include if we have meaningful content
+        if len(parts) <= 1:
+            return ""
+
+        parts.append("\nUse this context to provide personalized, empathetic support.")
+        return "\n".join(parts)
+
+    # =========================================================================
+    # Auto-Summarization Helpers
+    # =========================================================================
+
+    def should_summarize_session(self, session_id: str) -> bool:
+        """Check if a session has enough content to warrant summarization."""
+        session = self.db.query(ChatSession).filter_by(session_id=session_id).first()
+        if not session:
+            return False
+
+        # Check if already summarized
+        existing = self.db.query(JournalChatSummary).filter_by(chat_session_id=session.id).first()
+        if existing:
+            return False
+
+        # Get user messages
+        messages = (
+            self.db.query(ChatMessage)
+            .filter_by(session_id=session.id)
+            .filter(ChatMessage.role == "user")
+            .all()
+        )
+
+        # Minimum thresholds: 3+ user messages, 100+ words total
+        if len(messages) < 3:
+            return False
+
+        total_words = sum(len(msg.content.split()) for msg in messages)
+        return total_words >= 100
+
+    async def auto_summarize_and_approve(self, session_id: str) -> Optional[JournalEntry]:
+        """Generate a summary and automatically create a journal entry."""
+        if not self.should_summarize_session(session_id):
+            return None
+
+        # Generate summary
+        summary = await self.generate_chat_summary(session_id)
+        if not summary:
+            return None
+
+        # Auto-approve it
+        entry = await self.approve_summary(
+            summary_id=summary.summary_id,
+            title=f"Journal - {summary.created_at.strftime('%B %d, %Y')}",
+            mood=summary.sentiment
+            if summary.sentiment in ["positive", "negative", "neutral"]
+            else None,
+            tags=summary.key_topics,
+        )
+
+        logger.info(
+            "auto_summarized_session",
+            session_id=session_id,
+            entry_id=str(entry.entry_id) if entry else None,
+        )
+        return entry

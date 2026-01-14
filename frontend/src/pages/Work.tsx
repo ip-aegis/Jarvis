@@ -9,7 +9,6 @@ import type {
   AccountStats,
   AccountEvents,
   AccountSummary,
-  AccountIntelligence,
   WorkNoteCreate,
   AccountCreate,
   WorkContact,
@@ -162,11 +161,19 @@ export default function Work() {
     // Reset summary when switching accounts
     setAccountSummary(null)
     try {
-      const [statsRes, notesRes, eventsRes] = await Promise.all([
+      // Fetch fresh account data along with stats, notes, and events
+      const [freshAccount, statsRes, notesRes, eventsRes] = await Promise.all([
+        api.getWorkAccount(account.account_id),
         api.getAccountStats(account.account_id),
         api.listWorkNotes(account.account_id, { limit: 50 }),
         api.getAccountEvents(account.account_id),
       ])
+      // Update selectedAccount with fresh data (includes contacts)
+      setSelectedAccount(freshAccount)
+      // Also update the account in the accounts list
+      setAccounts(prev => prev.map(acc =>
+        acc.account_id === freshAccount.account_id ? freshAccount : acc
+      ))
       setAccountStats(statsRes)
       setAccountNotes(notesRes.notes)
       setAccountEvents(eventsRes)
@@ -186,13 +193,15 @@ export default function Work() {
   const loadContextForAccount = useCallback(async (account: WorkAccount) => {
     setLoadingContext(true)
     try {
-      const [statsRes, notesRes] = await Promise.all([
+      // Fetch fresh account data along with stats and notes
+      const [freshAccount, statsRes, notesRes] = await Promise.all([
+        api.getWorkAccount(account.account_id),
         api.getAccountStats(account.account_id),
         api.listWorkNotes(account.account_id, { limit: 10 }),
       ])
       setContextStats(statsRes)
       setContextNotes(notesRes.notes)
-      setContextAccount(account)
+      setContextAccount(freshAccount)
     } catch (err) {
       console.error('Failed to load context:', err)
     }
@@ -212,6 +221,16 @@ export default function Work() {
   const handleModelLoaded = useCallback((model: string) => {
     setCurrentModel(model)
   }, [])
+
+  // Refresh account data after chat may have modified it (e.g., added contacts)
+  const handleDataChanged = useCallback(async () => {
+    if (selectedAccount) {
+      loadAccountDetails(selectedAccount)
+    }
+    if (contextAccount) {
+      loadContextForAccount(contextAccount)
+    }
+  }, [selectedAccount, contextAccount, loadAccountDetails, loadContextForAccount])
 
   const generateSummary = useCallback(async () => {
     if (!selectedAccount) return
@@ -719,6 +738,7 @@ export default function Work() {
                   placeholder="Ask about accounts, add notes, search history..."
                   onModelLoaded={handleModelLoaded}
                   onNewChat={handleNewChat}
+                  onDataChanged={handleDataChanged}
                 />
               </div>
             </div>
@@ -1380,6 +1400,7 @@ export default function Work() {
                     sessionId={accountsChatSessionId}
                     context="work"
                     placeholder={selectedAccount ? `Ask about ${selectedAccount.name}...` : "Ask about your accounts..."}
+                    onDataChanged={handleDataChanged}
                   />
                 </div>
               </div>

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.database import get_db
+from app.services.llm_usage import log_llm_usage
 from app.services.openai_service import OpenAIService
 from app.services.settings import CHAT_CONTEXTS, SettingsService
 
@@ -152,8 +153,17 @@ Respond with a JSON object in this exact format (no markdown, just raw JSON):
 
     try:
         # Use gpt-4o for the recommendation (most capable, up-to-date knowledge)
-        response = await openai_service.chat(
+        response, usage = await openai_service.chat_with_usage(
             messages=[{"role": "user", "content": prompt}], model="gpt-4o"
+        )
+
+        # Log usage
+        log_llm_usage(
+            feature="settings",
+            model=usage.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            function_name="recommend_models",
         )
 
         # Parse the JSON response

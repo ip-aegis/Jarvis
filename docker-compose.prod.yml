@@ -72,6 +72,25 @@ services:
     networks:
       - jarvis-internal
 
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: jarvis-adguard
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "853:853/tcp"
+    volumes:
+      - jarvis_adguard_work:/opt/adguardhome/work
+      - jarvis_adguard_conf:/opt/adguardhome/conf
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - jarvis-internal
+
   nginx:
     image: nginx:alpine
     container_name: jarvis-nginx
@@ -100,3 +119,5 @@ networks:
 volumes:
   jarvis_db_data:
   jarvis_ssh_keys:
+  jarvis_adguard_work:
+  jarvis_adguard_conf:

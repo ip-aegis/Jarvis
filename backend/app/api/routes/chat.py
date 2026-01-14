@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.database import get_db
 from app.models import ChatMessage, ChatSession
+from app.services.journal import JournalService
+from app.services.llm_usage import log_llm_usage
 from app.services.openai_service import OpenAIService
 from app.services.work_notes import WorkNotesService
 from app.tools import tool_registry
@@ -54,9 +56,12 @@ class ChatContext(str, Enum):
     HOME = "home"
     JOURNAL = "journal"
     WORK = "work"
+    DNS = "dns"
 
 
-class ChatMessage(BaseModel):
+class ChatMessageSchema(BaseModel):
+    """Pydantic schema for chat message in request/response."""
+
     role: str  # "user" or "assistant"
     content: str
 
@@ -65,7 +70,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     context: ChatContext = ChatContext.GENERAL
-    history: Optional[list[ChatMessage]] = None
+    history: Optional[list[ChatMessageSchema]] = None
     model: Optional[str] = None  # Optional model override for A/B testing
 
 
@@ -225,6 +230,39 @@ When the user mentions an account name (like "notes for Covia" or "Covia meeting
 5. Only create after explicit confirmation
 
 Be professional and efficient. Help organize work information effectively. When adding notes, the system will automatically extract contacts, action items, and tags from the content.""",
+    ChatContext.DNS: """You are Jarvis, focused on DNS security, ad blocking, and network privacy protection.
+You manage the network's DNS filtering using AdGuard Home.
+
+**Query & Statistics Tools:**
+- get_dns_stats: Get DNS query statistics (total queries, blocked, cached, response time)
+- get_dns_top_blocked: See the most blocked domains
+- get_dns_top_queries: See the most queried domains
+- lookup_domain: Check if a specific domain is blocked and why
+- search_query_log: Search DNS query history by domain, client, or status
+- get_dns_client_stats: Get DNS statistics for a specific device/client
+- get_threat_summary: Summarize recent security-related blocks (malware, phishing, etc.)
+
+**Management Tools:**
+- list_blocklists: View all active blocklists
+- list_custom_rules: View custom block/allow rules
+- block_domain: Block a domain network-wide
+- allow_domain: Whitelist a domain
+- detect_dns_anomalies: Detect suspicious patterns like DGA malware or DNS tunneling
+
+**What You Can Help With:**
+- Checking DNS statistics and blocked queries
+- Investigating why specific domains are blocked
+- Blocking unwanted domains (ads, tracking, malware)
+- Whitelisting domains that are incorrectly blocked
+- Identifying suspicious DNS patterns on the network
+- Analyzing client DNS behavior
+
+IMPORTANT:
+- ALWAYS use tools to get real DNS data. Never make up statistics.
+- When blocking domains, explain the impact and ask for confirmation if it might affect legitimate services.
+- Be proactive about security threats - if you detect anomalies, warn the user.
+
+Be helpful and security-focused. Protect the network while ensuring legitimate access.""",
 }
 
 
@@ -320,6 +358,33 @@ def get_tools_for_context(context: ChatContext) -> list:
         "get_user_profile",
     ]
 
+    DNS_TOOLS = [
+        # Core DNS tools
+        "get_dns_stats",
+        "get_dns_top_blocked",
+        "get_dns_top_queries",
+        "lookup_domain",
+        "search_query_log",
+        "get_dns_client_stats",
+        "get_threat_summary",
+        "list_blocklists",
+        "list_custom_rules",
+        "block_domain",
+        "allow_domain",
+        "detect_dns_anomalies",
+        # Analytics tools
+        "get_client_dns_behavior",
+        "get_domain_reputation",
+        "get_dns_security_alerts",
+        "analyze_dns_threat",
+        "investigate_domain",
+        "investigate_client",
+        "compare_client_to_baseline",
+        "acknowledge_dns_alert",
+        "mark_dns_false_positive",
+        "block_domain_with_alert",
+    ]
+
     if context == ChatContext.GENERAL:
         # General context gets all tools
         return all_tools
@@ -344,6 +409,9 @@ def get_tools_for_context(context: ChatContext) -> list:
     elif context == ChatContext.WORK:
         # Work context gets work/account tools
         return [t for t in all_tools if t["function"]["name"] in WORK_TOOLS]
+    elif context == ChatContext.DNS:
+        # DNS context gets DNS security tools
+        return [t for t in all_tools if t["function"]["name"] in DNS_TOOLS]
 
     return all_tools
 
@@ -363,6 +431,13 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
         if profile_context:
             system_prompt = f"{system_prompt}\n\n{profile_context}"
 
+    # Inject user profile for journal context
+    if request.context == ChatContext.JOURNAL:
+        journal_service = JournalService(db)
+        profile_context = journal_service.build_profile_context()
+        if profile_context:
+            system_prompt = f"{system_prompt}\n\n{profile_context}"
+
     # Build message history
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -375,11 +450,24 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
     try:
         # Use tool-enabled chat if tools are available
         if tools:
-            response = await openai_service.chat_with_tools(
+            response, usage, tool_calls_count = await openai_service.chat_with_tools_and_usage(
                 messages, tools, execute_tool, model=request.model
             )
         else:
-            response = await openai_service.chat(messages, model=request.model)
+            response, usage = await openai_service.chat_with_usage(messages, model=request.model)
+            tool_calls_count = 0
+
+        # Log usage
+        log_llm_usage(
+            feature="chat",
+            model=usage.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            function_name="chat_message",
+            context=request.context.value,
+            session_id=request.session_id,
+            tool_calls_count=tool_calls_count,
+        )
 
         # Try to save to database (non-blocking)
         try:
@@ -390,6 +478,14 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
             logger.warning(
                 "database_save_failed", error=str(db_error), session_id=request.session_id
             )
+
+        # Trigger learning for journal context (fire-and-forget)
+        if request.context == ChatContext.JOURNAL:
+            import asyncio
+
+            from app.services.journal_tasks import process_session_now
+
+            asyncio.create_task(process_session_now(request.session_id))
 
         return ChatResponse(
             response=response,
@@ -415,6 +511,13 @@ async def stream_message(request: ChatRequest, db: Session = Depends(get_db)):
         if profile_context:
             system_prompt = f"{system_prompt}\n\n{profile_context}"
 
+    # Inject user profile for journal context
+    if request.context == ChatContext.JOURNAL:
+        journal_service = JournalService(db)
+        profile_context = journal_service.build_profile_context()
+        if profile_context:
+            system_prompt = f"{system_prompt}\n\n{profile_context}"
+
     messages = [{"role": "system", "content": system_prompt}]
 
     if request.history:
@@ -423,19 +526,39 @@ async def stream_message(request: ChatRequest, db: Session = Depends(get_db)):
 
     messages.append({"role": "user", "content": request.message})
 
-    # Track full response for saving to DB
+    # Track full response for saving to DB and usage tracking
     full_response = []
+    usage_logged = {"done": False}  # Track if usage was logged (mutable for closure)
+
+    # Usage callback for streaming
+    def log_streaming_usage(usage_data, tool_calls_count=0):
+        if not usage_logged["done"]:
+            log_llm_usage(
+                feature="chat",
+                model=usage_data.model,
+                prompt_tokens=usage_data.prompt_tokens,
+                completion_tokens=usage_data.completion_tokens,
+                function_name="chat_stream",
+                context=request.context.value,
+                session_id=request.session_id,
+                tool_calls_count=tool_calls_count,
+            )
+            usage_logged["done"] = True
 
     async def generate():
         nonlocal full_response
 
-        # If tools available, use tool-enabled streaming
+        # If tools available, use tool-enabled streaming with usage tracking
         if tools:
             try:
                 yield f"data: {json.dumps({'content': ''})}\n\n"  # Initial connection
 
-                async for chunk in openai_service.chat_with_tools_stream(
-                    messages, tools, execute_tool, model=request.model
+                async for chunk in openai_service.chat_with_tools_stream_with_usage(
+                    messages,
+                    tools,
+                    execute_tool,
+                    model=request.model,
+                    usage_callback=log_streaming_usage,
                 ):
                     full_response.append(chunk)
                     yield f"data: {json.dumps({'content': chunk})}\n\n"
@@ -445,8 +568,12 @@ async def stream_message(request: ChatRequest, db: Session = Depends(get_db)):
                 logger.warning("tool_calling_failed", error=str(e), context=request.context.value)
                 # Fall through to regular streaming
 
-        # Regular streaming without tools
-        async for chunk in openai_service.chat_stream(messages, model=request.model):
+        # Regular streaming without tools (with usage tracking)
+        async for chunk in openai_service.chat_stream_with_usage(
+            messages,
+            model=request.model,
+            usage_callback=lambda usage: log_streaming_usage(usage, 0),
+        ):
             full_response.append(chunk)
             yield f"data: {json.dumps({'content': chunk})}\n\n"
         yield "data: [DONE]\n\n"
@@ -464,6 +591,14 @@ async def stream_message(request: ChatRequest, db: Session = Depends(get_db)):
             logger.warning(
                 "database_save_failed", error=str(db_error), session_id=request.session_id
             )
+
+        # Trigger learning for journal context (fire-and-forget)
+        if request.context == ChatContext.JOURNAL:
+            import asyncio
+
+            from app.services.journal_tasks import process_session_now
+
+            asyncio.create_task(process_session_now(request.session_id))
 
     return StreamingResponse(
         stream_and_save(),

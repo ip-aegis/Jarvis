@@ -27,6 +27,11 @@ import type {
   JournalSearchResult,
   JournalCalendarData,
   JournalStats,
+  JournalUserProfile,
+  JournalProfileUpdate,
+  JournalRetroactiveStatus,
+  JournalRetroactiveResult,
+  JournalExtractionsResponse,
   WorkAccount,
   WorkNote,
   WorkNoteCreate,
@@ -44,6 +49,18 @@ import type {
   LearnResult,
   UserSettings,
   ModelDefaults,
+  DnsStatus,
+  DnsStats,
+  DnsBlocklist,
+  DnsCustomRule,
+  DnsClient,
+  DnsQueryLogEntry,
+  DnsAnomaly,
+  DnsLookupResult,
+  DnsSecurityAlert,
+  DnsClientProfile,
+  DnsDomainReputation,
+  DnsDetectionResult,
 } from '../types'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -837,6 +854,101 @@ class ApiService {
     return response.json()
   }
 
+  // Journal Profile
+  async getJournalProfile(): Promise<{ profile: JournalUserProfile | null; message?: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/journal/profile`)
+      if (!response.ok) {
+        throw new Error('Failed to fetch journal profile')
+      }
+      return response.json()
+    } catch (e) {
+      console.error('getJournalProfile error:', e)
+      return { profile: null }
+    }
+  }
+
+  async updateJournalProfile(updates: JournalProfileUpdate): Promise<{ profile: JournalUserProfile }> {
+    const response = await fetch(`${this.baseUrl}/api/journal/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to update journal profile')
+    }
+    return response.json()
+  }
+
+  async deleteJournalFact(factId: string): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseUrl}/api/journal/profile/facts/${factId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to delete fact')
+    }
+    return response.json()
+  }
+
+  async verifyJournalFact(factId: string, verified = true): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseUrl}/api/journal/profile/facts/${factId}/verify?verified=${verified}`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to verify fact')
+    }
+    return response.json()
+  }
+
+  // Journal Retroactive Processing
+  async getJournalRetroactiveStatus(): Promise<JournalRetroactiveStatus> {
+    const response = await fetch(`${this.baseUrl}/api/journal/retroactive/status`)
+    if (!response.ok) {
+      throw new Error('Failed to fetch retroactive status')
+    }
+    return response.json()
+  }
+
+  async processJournalRetroactive(limit = 100): Promise<JournalRetroactiveResult> {
+    const response = await fetch(`${this.baseUrl}/api/journal/retroactive/process?limit=${limit}`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to process retroactive')
+    }
+    return response.json()
+  }
+
+  async getJournalExtractions(params?: {
+    limit?: number
+    status?: string
+  }): Promise<JournalExtractionsResponse> {
+    const queryParams = new URLSearchParams()
+    if (params?.limit) queryParams.append('limit', params.limit.toString())
+    if (params?.status) queryParams.append('status', params.status)
+    const query = queryParams.toString()
+    const response = await fetch(`${this.baseUrl}/api/journal/extractions/recent${query ? `?${query}` : ''}`)
+    if (!response.ok) {
+      throw new Error('Failed to fetch extractions')
+    }
+    return response.json()
+  }
+
+  async addJournalExtraction(extractionId: number): Promise<{ status: string; message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/journal/extractions/${extractionId}/add`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || 'Failed to add extraction')
+    }
+    return response.json()
+  }
+
   // =============================================================================
   // Work Notes
   // =============================================================================
@@ -1107,6 +1219,373 @@ class ApiService {
   }
 
   // =============================================================================
+  // DNS Security
+  // =============================================================================
+
+  async getDnsStatus(): Promise<DnsStatus> {
+    const response = await fetch(`${this.baseUrl}/api/dns/status`)
+    if (!response.ok) throw new Error('Failed to fetch DNS status')
+    return response.json()
+  }
+
+  async getDnsStats(hours: number = 24): Promise<DnsStats> {
+    const response = await fetch(`${this.baseUrl}/api/dns/stats?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch DNS stats')
+    return response.json()
+  }
+
+  async getDnsConfig(): Promise<{ database: Record<string, unknown>; adguard: Record<string, unknown> }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/config`)
+    if (!response.ok) throw new Error('Failed to fetch DNS config')
+    return response.json()
+  }
+
+  async updateDnsConfig(config: Record<string, unknown>): Promise<{ message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    if (!response.ok) throw new Error('Failed to update DNS config')
+    return response.json()
+  }
+
+  async getDnsBlocklists(): Promise<{ blocklists: DnsBlocklist[]; adguard_filters: unknown[] }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/blocklists`)
+    if (!response.ok) throw new Error('Failed to fetch blocklists')
+    return response.json()
+  }
+
+  async addDnsBlocklist(blocklist: { name: string; url: string; category?: string }): Promise<{ message: string; blocklist: DnsBlocklist }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/blocklists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(blocklist),
+    })
+    if (!response.ok) throw new Error('Failed to add blocklist')
+    return response.json()
+  }
+
+  async removeDnsBlocklist(blocklistId: number): Promise<{ message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/blocklists/${blocklistId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw new Error('Failed to remove blocklist')
+    return response.json()
+  }
+
+  async updateDnsBlocklist(blocklistId: number, update: { enabled?: boolean; name?: string }): Promise<{ message: string; blocklist: DnsBlocklist }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/blocklists/${blocklistId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    if (!response.ok) throw new Error('Failed to update blocklist')
+    return response.json()
+  }
+
+  async forceUpdateBlocklist(blocklistId: number): Promise<{ message: string; success: boolean }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/blocklists/${blocklistId}/update`, {
+      method: 'POST',
+    })
+    if (!response.ok) throw new Error('Failed to update blocklist')
+    return response.json()
+  }
+
+
+  async setupDefaultBlocklists(): Promise<{ added: string[]; errors: string[] }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/blocklists/setup-defaults`, {
+      method: 'POST',
+    })
+    if (!response.ok) throw new Error('Failed to setup default blocklists')
+    return response.json()
+  }
+
+  async getDnsCustomRules(): Promise<{ rules: DnsCustomRule[]; adguard_rules: string[] }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rules`)
+    if (!response.ok) throw new Error('Failed to fetch custom rules')
+    return response.json()
+  }
+
+  async addDnsCustomRule(ruleType: 'block' | 'allow', domain: string, comment?: string): Promise<{ message: string; rule: DnsCustomRule }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rule_type: ruleType, domain, comment }),
+    })
+    if (!response.ok) throw new Error('Failed to add custom rule')
+    return response.json()
+  }
+
+  async removeDnsCustomRule(ruleId: number): Promise<{ message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rules/${ruleId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw new Error('Failed to remove custom rule')
+    return response.json()
+  }
+
+  async blockDomain(domain: string, comment?: string): Promise<{ message: string; domain: string }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/block`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, comment }),
+    })
+    if (!response.ok) throw new Error('Failed to block domain')
+    return response.json()
+  }
+
+  async allowDomain(domain: string, comment?: string): Promise<{ message: string; domain: string }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/allow`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, comment }),
+    })
+    if (!response.ok) throw new Error('Failed to allow domain')
+    return response.json()
+  }
+
+  async bulkImportRules(rules: string[], ruleType: 'block' | 'allow', comment?: string): Promise<{ message: string; added: string[]; skipped: string[]; failed: string[] }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rules/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules, rule_type: ruleType, comment }),
+    })
+    if (!response.ok) throw new Error('Failed to bulk import rules')
+    return response.json()
+  }
+
+  // =============================================================================
+  // DNS Rewrites (Custom DNS Entries)
+  // =============================================================================
+
+  async getDnsRewrites(): Promise<{ rewrites: DnsRewrite[]; adguard_rewrites: { domain: string; answer: string }[] }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rewrites`)
+    if (!response.ok) throw new Error('Failed to fetch DNS rewrites')
+    return response.json()
+  }
+
+  async addDnsRewrite(domain: string, answer: string, comment?: string): Promise<{ message: string; rewrite: DnsRewrite }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rewrites`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, answer, comment }),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Failed to add DNS rewrite' }))
+      throw new Error(error.detail || 'Failed to add DNS rewrite')
+    }
+    return response.json()
+  }
+
+  async updateDnsRewrite(rewriteId: number, domain: string, answer: string, comment?: string): Promise<{ message: string; rewrite: DnsRewrite }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rewrites/${rewriteId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain, answer, comment }),
+    })
+    if (!response.ok) throw new Error('Failed to update DNS rewrite')
+    return response.json()
+  }
+
+  async removeDnsRewrite(rewriteId: number): Promise<{ message: string }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/rewrites/${rewriteId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) throw new Error('Failed to remove DNS rewrite')
+    return response.json()
+  }
+
+  async getDnsQueryLog(limit: number = 100, search?: string, status?: string, clientIp?: string): Promise<{ entries: DnsQueryLogEntry[]; count: number }> {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (search) params.append('search', search)
+    if (status) params.append('status', status)
+    if (clientIp) params.append('client_ip', clientIp)
+    const response = await fetch(`${this.baseUrl}/api/dns/querylog?${params}`)
+    if (!response.ok) throw new Error('Failed to fetch query log')
+    return response.json()
+  }
+
+  async getDnsClients(): Promise<{ clients: DnsClient[]; adguard_clients: unknown }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/clients`)
+    if (!response.ok) throw new Error('Failed to fetch DNS clients')
+    return response.json()
+  }
+
+  async updateDnsClient(clientId: number, update: Record<string, unknown>): Promise<{ message: string; client: DnsClient }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/clients/${clientId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    })
+    if (!response.ok) throw new Error('Failed to update DNS client')
+    return response.json()
+  }
+
+  async lookupDomain(domain: string): Promise<DnsLookupResult> {
+    const response = await fetch(`${this.baseUrl}/api/dns/lookup/${encodeURIComponent(domain)}`)
+    if (!response.ok) throw new Error('Failed to lookup domain')
+    return response.json()
+  }
+
+  async detectDnsAnomalies(): Promise<{ anomalies: DnsAnomaly[]; count: number }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/anomalies`)
+    if (!response.ok) throw new Error('Failed to detect anomalies')
+    return response.json()
+  }
+
+  // =============================================================================
+  // DNS Security Analytics
+  // =============================================================================
+
+  async getDnsAlerts(params?: {
+    severity?: string
+    alert_type?: string
+    status?: string
+    client_ip?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ alerts: DnsSecurityAlert[]; total: number }> {
+    try {
+      const searchParams = new URLSearchParams()
+      if (params?.severity) searchParams.set('severity', params.severity)
+      if (params?.alert_type) searchParams.set('alert_type', params.alert_type)
+      if (params?.status) searchParams.set('status', params.status)
+      if (params?.client_ip) searchParams.set('client_ip', params.client_ip)
+      if (params?.limit) searchParams.set('limit', String(params.limit))
+      if (params?.offset) searchParams.set('offset', String(params.offset))
+
+      const url = `${this.baseUrl}/api/dns/alerts${searchParams.toString() ? '?' + searchParams.toString() : ''}`
+      const response = await fetch(url)
+      if (!response.ok) throw new Error('Failed to fetch DNS alerts')
+      return response.json()
+    } catch (e) {
+      console.error('getDnsAlerts error:', e)
+      return { alerts: [], total: 0 }
+    }
+  }
+
+  async getDnsAlert(alertId: string): Promise<DnsSecurityAlert> {
+    const response = await fetch(`${this.baseUrl}/api/dns/alerts/${alertId}`)
+    if (!response.ok) throw new Error('Failed to fetch DNS alert')
+    return response.json()
+  }
+
+  async acknowledgeDnsAlert(alertId: string, notes?: string): Promise<{ status: string; alert: DnsSecurityAlert }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/alerts/${alertId}/acknowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    })
+    if (!response.ok) throw new Error('Failed to acknowledge alert')
+    return response.json()
+  }
+
+  async resolveDnsAlert(alertId: string, notes?: string): Promise<{ status: string; alert: DnsSecurityAlert }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/alerts/${alertId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    })
+    if (!response.ok) throw new Error('Failed to resolve alert')
+    return response.json()
+  }
+
+  async markDnsFalsePositive(alertId: string, notes?: string): Promise<{ status: string; alert: DnsSecurityAlert }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/alerts/${alertId}/false-positive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    })
+    if (!response.ok) throw new Error('Failed to mark as false positive')
+    return response.json()
+  }
+
+  async getDomainReputation(domain: string): Promise<DnsDomainReputation> {
+    const response = await fetch(`${this.baseUrl}/api/dns/analytics/reputation/${encodeURIComponent(domain)}`)
+    if (!response.ok) throw new Error('Failed to fetch domain reputation')
+    return response.json()
+  }
+
+  async getClientBehavior(clientIp: string): Promise<{
+    client_ip: string
+    profile: DnsClientProfile | null
+    recent_anomalies: DnsSecurityAlert[]
+    risk_level: string
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/analytics/client/${encodeURIComponent(clientIp)}/behavior`)
+    if (!response.ok) throw new Error('Failed to fetch client behavior')
+    return response.json()
+  }
+
+  async getClientBaseline(clientIp: string): Promise<{
+    client_ip: string
+    baseline: DnsClientProfile | null
+    comparison: {
+      query_rate_deviation: number
+      new_domains_count: number
+      unusual_hours_activity: boolean
+    } | null
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/dns/analytics/client/${encodeURIComponent(clientIp)}/baseline`)
+    if (!response.ok) throw new Error('Failed to fetch client baseline')
+    return response.json()
+  }
+
+  async runDnsDetection(params?: {
+    client_ip?: string
+    hours?: number
+  }): Promise<DnsDetectionResult> {
+    const searchParams = new URLSearchParams()
+    if (params?.client_ip) searchParams.set('client_ip', params.client_ip)
+    if (params?.hours) searchParams.set('hours', String(params.hours))
+
+    const url = `${this.baseUrl}/api/dns/analytics/detection/run${searchParams.toString() ? '?' + searchParams.toString() : ''}`
+    const response = await fetch(url)
+    if (!response.ok) throw new Error('Failed to run detection')
+    return response.json()
+  }
+
+  connectDnsAlerts(
+    onAlert: (alert: DnsSecurityAlert) => void,
+    onError?: (error: Event) => void,
+    filters?: { severity?: string[]; alert_types?: string[]; client_ips?: string[] }
+  ): WebSocket {
+    const wsUrl = this.baseUrl.replace(/^http/, 'ws')
+    const ws = new WebSocket(`${wsUrl}/api/dns/alerts/ws`)
+
+    ws.onopen = () => {
+      console.log('DNS alerts WebSocket connected')
+      // Send subscription filters if provided
+      if (filters) {
+        ws.send(JSON.stringify({ type: 'subscribe', filters }))
+      }
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'dns_alert') {
+          onAlert(data as DnsSecurityAlert)
+        }
+      } catch (e) {
+        console.error('Error parsing DNS alert:', e)
+      }
+    }
+
+    ws.onerror = (error) => {
+      console.error('DNS alerts WebSocket error:', error)
+      if (onError) onError(error)
+    }
+
+    ws.onclose = () => {
+      console.log('DNS alerts WebSocket disconnected')
+    }
+
+    return ws
+  }
+
+  // =============================================================================
   // Settings
   // =============================================================================
 
@@ -1148,6 +1627,7 @@ class ApiService {
         home: 'gpt-4o-mini',
         journal: 'gpt-4o-mini',
         work: 'gpt-4o-mini',
+        dns: 'gpt-4o-mini',
       }
     }
   }

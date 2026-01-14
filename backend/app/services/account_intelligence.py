@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.models import WorkAccount
+from app.services.llm_usage import log_llm_usage
 from app.services.openai_service import OpenAIService
 from app.services.search import SearchService
 
@@ -90,9 +91,18 @@ class AccountIntelligenceService:
         )
 
         try:
-            response = await self.openai_service.chat(
+            response, usage = await self.openai_service.chat_with_usage(
                 messages=[{"role": "user", "content": prompt}],
                 model="gpt-4o-mini",
+            )
+
+            # Log usage
+            log_llm_usage(
+                feature="work",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="account_intelligence",
             )
 
             # Parse JSON response

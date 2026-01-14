@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.logging import get_logger
 from app.models import WorkAccount, WorkNote, WorkUserProfile
+from app.services.llm_usage import log_llm_usage
 from app.services.openai_service import OpenAIService
 
 logger = get_logger(__name__)
@@ -417,7 +418,16 @@ class WorkNotesService:
                 f"Account: {account.name}\n\n{note.content}" if account else note.content
             )
 
-            embedding = await self.openai.generate_embedding(text_to_embed)
+            embedding, usage = await self.openai.generate_embedding_with_usage(text_to_embed)
+
+            # Log usage
+            log_llm_usage(
+                feature="work",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="note_embedding",
+            )
 
             self.db.execute(
                 text("UPDATE work_notes SET embedding = :embedding WHERE id = :id"),
@@ -446,7 +456,17 @@ Only include fields where you found relevant info. Be concise.""",
                 {"role": "user", "content": note.content},
             ]
 
-            response = await self.openai.chat(prompt)
+            response, usage = await self.openai.chat_with_usage(prompt, model="gpt-4o-mini")
+
+            # Log usage
+            log_llm_usage(
+                feature="work",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="entity_extraction",
+            )
+
             data = json.loads(response)
 
             if data.get("activity_type") and not note.activity_type:
@@ -471,7 +491,17 @@ Only include fields where you found relevant info. Be concise.""",
     ) -> list[tuple[WorkNote, float]]:
         """Search notes using semantic similarity."""
         try:
-            query_embedding = await self.openai.generate_embedding(query)
+            query_embedding, usage = await self.openai.generate_embedding_with_usage(query)
+
+            # Log usage
+            log_llm_usage(
+                feature="work",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="semantic_search",
+            )
+
             embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
             settings = get_settings()
@@ -856,7 +886,17 @@ Generate the summaries.""",
         ]
 
         try:
-            response = await self.openai.chat(prompt, model="gpt-4o-mini")
+            response, usage = await self.openai.chat_with_usage(prompt, model="gpt-4o-mini")
+
+            # Log usage
+            log_llm_usage(
+                feature="work",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="account_summary",
+            )
+
             data = json.loads(response)
             return {
                 "account_overview": data.get("account_overview", ""),
@@ -1070,7 +1110,18 @@ Example output:
         ]
 
         try:
-            response = await self.openai.chat(prompt, model="gpt-4o-mini")
+            response, usage = await self.openai.chat_with_usage(prompt, model="gpt-4o-mini")
+
+            # Log usage
+            log_llm_usage(
+                feature="work",
+                model=usage.model,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                function_name="fact_extraction",
+                session_id=session_id,
+            )
+
             facts = json.loads(response)
             if not isinstance(facts, list):
                 return []

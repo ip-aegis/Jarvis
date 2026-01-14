@@ -11,6 +11,7 @@ from app.api.routes import (
     auth,
     chat,
     dashboard,
+    dns,
     health,
     home,
     journal,
@@ -18,6 +19,7 @@ from app.api.routes import (
     network,
     projects,
     servers,
+    usage,
     work,
 )
 from app.api.routes import settings as settings_routes
@@ -65,9 +67,82 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("home_automation_startup_failed", error=str(e))
 
+    # Start journal background tasks
+    try:
+        from app.services.journal_tasks import start_journal_tasks, stop_journal_tasks
+
+        await start_journal_tasks()
+        logger.info("journal_tasks_started")
+    except Exception as e:
+        logger.warning("journal_tasks_startup_failed", error=str(e))
+
+    # Start DNS background tasks
+    try:
+        from app.services.dns_tasks import start_dns_tasks, stop_dns_tasks
+
+        await start_dns_tasks()
+        logger.info("dns_tasks_started")
+    except Exception as e:
+        logger.warning("dns_tasks_startup_failed", error=str(e))
+
+    # Start DNS analytics background tasks
+    try:
+        from app.services.dns_analytics_tasks import start_analytics_tasks, stop_analytics_tasks
+
+        await start_analytics_tasks()
+        logger.info("dns_analytics_tasks_started")
+    except Exception as e:
+        logger.warning("dns_analytics_tasks_startup_failed", error=str(e))
+
+    # Start LLM usage aggregation background task
+    try:
+        import asyncio
+
+        from app.services.llm_usage import get_usage_service
+
+        async def aggregate_llm_usage_loop():
+            """Run hourly LLM usage aggregation."""
+            while True:
+                await asyncio.sleep(3600)  # 1 hour
+                try:
+                    service = get_usage_service()
+                    count = service.aggregate_hourly_stats()
+                    logger.info("llm_usage_aggregated", records=count)
+                except Exception as e:
+                    logger.error("llm_usage_aggregation_failed", error=str(e))
+
+        asyncio.create_task(aggregate_llm_usage_loop())
+        logger.info("llm_usage_aggregation_started")
+    except Exception as e:
+        logger.warning("llm_usage_aggregation_startup_failed", error=str(e))
+
     yield
 
     # Shutdown
+    try:
+        from app.services.dns_analytics_tasks import stop_analytics_tasks
+
+        await stop_analytics_tasks()
+        logger.info("dns_analytics_tasks_stopped")
+    except Exception as e:
+        logger.warning("dns_analytics_tasks_shutdown_failed", error=str(e))
+
+    try:
+        from app.services.dns_tasks import stop_dns_tasks
+
+        await stop_dns_tasks()
+        logger.info("dns_tasks_stopped")
+    except Exception as e:
+        logger.warning("dns_tasks_shutdown_failed", error=str(e))
+
+    try:
+        from app.services.journal_tasks import stop_journal_tasks
+
+        await stop_journal_tasks()
+        logger.info("journal_tasks_stopped")
+    except Exception as e:
+        logger.warning("journal_tasks_shutdown_failed", error=str(e))
+
     try:
         from app.services.home.background_tasks import stop_background_tasks
 
@@ -126,6 +201,8 @@ app.include_router(actions.router, prefix="/api/actions", tags=["actions"])
 app.include_router(home.router, prefix="/api/home", tags=["home"])
 app.include_router(journal.router, prefix="/api/journal", tags=["journal"])
 app.include_router(work.router, prefix="/api/work", tags=["work"])
+app.include_router(dns.router, prefix="/api/dns", tags=["dns"])
+app.include_router(usage.router, prefix="/api", tags=["usage"])
 app.include_router(settings_routes.router, prefix="/api/settings", tags=["settings"])
 
 

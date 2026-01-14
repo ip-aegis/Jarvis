@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import ServerOnboardingError
 from app.core.logging import get_logger
 from app.database import get_db
-from app.models import Server
+from app.models import Metric, Project, Server
 from app.services.agent import AgentService
 from app.services.ollama import OllamaService
 from app.services.ssh import SSHService
@@ -197,9 +197,19 @@ async def remove_server(server_id: int, db: Session = Depends(get_db)):
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
 
-    db.delete(server)
-    db.commit()
-    return {"status": "deleted", "server_id": server_id}
+    try:
+        # Delete related records first (metrics, projects)
+        db.query(Metric).filter(Metric.server_id == server_id).delete()
+        db.query(Project).filter(Project.server_id == server_id).delete()
+
+        db.delete(server)
+        db.commit()
+        logger.info("server_deleted", server_id=server_id, hostname=server.hostname)
+        return {"status": "deleted", "server_id": server_id}
+    except Exception as e:
+        db.rollback()
+        logger.exception("server_delete_failed", server_id=server_id)
+        raise HTTPException(status_code=500, detail=f"Failed to delete server: {str(e)}")
 
 
 @router.post("/{server_id}/test-connection")
