@@ -25,14 +25,14 @@ class FeatureUsage(BaseModel):
     feature: str
     request_count: int
     total_tokens: int
-    cost_cents: int
+    cost_cents: float
 
 
 class ModelUsage(BaseModel):
     model: str
     request_count: int
     total_tokens: int
-    cost_cents: int
+    cost_cents: float
 
 
 class UsageSummaryResponse(BaseModel):
@@ -41,7 +41,7 @@ class UsageSummaryResponse(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-    total_cost_cents: int
+    total_cost_cents: float
     total_cost_dollars: float
     by_feature: list[FeatureUsage]
     by_model: list[ModelUsage]
@@ -51,7 +51,7 @@ class HourlyUsage(BaseModel):
     timestamp: Optional[str]
     request_count: int
     total_tokens: int
-    cost_cents: int
+    cost_cents: float
 
 
 class DetailedUsage(BaseModel):
@@ -62,7 +62,7 @@ class DetailedUsage(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-    cost_cents: int
+    cost_cents: float
     avg_tokens_per_request: int
 
 
@@ -72,7 +72,7 @@ class DailyUsage(BaseModel):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    cost_cents: int
+    cost_cents: float
 
 
 class MonthlyUsage(BaseModel):
@@ -84,7 +84,7 @@ class MonthlyUsage(BaseModel):
     total_tokens: int
     prompt_tokens: int
     completion_tokens: int
-    cost_cents: int
+    cost_cents: float
 
 
 class PeriodStats(BaseModel):
@@ -92,7 +92,7 @@ class PeriodStats(BaseModel):
     end: str
     request_count: int
     total_tokens: int
-    cost_cents: int
+    cost_cents: float
     cost_dollars: float
 
 
