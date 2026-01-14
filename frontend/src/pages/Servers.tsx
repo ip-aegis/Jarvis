@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Server, Wifi, WifiOff, RefreshCw, Trash2 } from 'lucide-react'
 import OnboardingWizard from '../components/servers/OnboardingWizard'
-import { api, Server as ServerType } from '../services/api'
+import { api } from '../services/api'
 
 interface ServerInfo {
   id: number

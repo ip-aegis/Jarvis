@@ -28,9 +28,8 @@ export default function Monitoring() {
   const [serverMetrics, setServerMetrics] = useState<ServerMetric[]>([])
   const [selectedServer, setSelectedServer] = useState<number | null>(null)
   const [cpuHistory, setCpuHistory] = useState<HistoryPoint[]>([])
-  const [loading, setLoading] = useState(true)
 
-  const { connected, metrics: wsMetrics } = useWebSocket({
+  const { connected } = useWebSocket({
     onMessage: (data) => {
       // Update server metrics in real-time
       setServerMetrics((prev) =>
@@ -80,7 +79,6 @@ export default function Monitoring() {
 
   const fetchMetrics = async () => {
     try {
-      setLoading(true)
       const data = await api.getMetrics()
       setServerMetrics(data.metrics)
       if (data.metrics.length > 0 && !selectedServer) {
@@ -88,8 +86,6 @@ export default function Monitoring() {
       }
     } catch (err) {
       console.error('Failed to fetch metrics:', err)
-    } finally {
-      setLoading(false)
     }
   }
 

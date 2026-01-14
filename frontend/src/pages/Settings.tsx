@@ -282,14 +282,6 @@ export default function Settings() {
             </div>
           </div>
         </div>
-
-        {/* Additional Settings Placeholder */}
-        <div className="magnetic-card p-6 mt-6 opacity-50">
-          <h2 className="text-lg font-semibold text-white mb-2">Additional Settings</h2>
-          <p className="text-sm text-gray-400">
-            More settings coming soon...
-          </p>
-        </div>
       </div>
     </div>
   )

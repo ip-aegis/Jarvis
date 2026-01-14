@@ -17,11 +17,16 @@ interface UseWebSocketOptions {
   onMessage?: (data: MetricUpdate) => void
 }
 
+const MAX_RECONNECT_ATTEMPTS = 10
+const BASE_RECONNECT_DELAY = 1000 // 1 second
+const MAX_RECONNECT_DELAY = 30000 // 30 seconds
+
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [connected, setConnected] = useState(false)
   const [metrics, setMetrics] = useState<Record<number, MetricUpdate>>({})
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectAttemptsRef = useRef(0)
 
   const connect = useCallback(() => {
     // Don't connect if we're already connecting or connected
@@ -40,6 +45,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       ws.onopen = () => {
         console.log('WebSocket connected')
         setConnected(true)
+        // Reset reconnect attempts on successful connection
+        reconnectAttemptsRef.current = 0
         // Subscribe to specific servers if provided
         if (options.serverIds && options.serverIds.length > 0) {
           ws.send(JSON.stringify({
@@ -68,10 +75,20 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         console.log('WebSocket disconnected')
         setConnected(false)
         wsRef.current = null
-        // Reconnect after 5 seconds
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connect()
-        }, 5000)
+        // Reconnect with exponential backoff
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(
+            BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttemptsRef.current),
+            MAX_RECONNECT_DELAY
+          )
+          console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1}/${MAX_RECONNECT_ATTEMPTS})`)
+          reconnectAttemptsRef.current++
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connect()
+          }, delay)
+        } else {
+          console.log('Max reconnect attempts reached, giving up')
+        }
       }
 
       ws.onerror = () => {
@@ -79,12 +96,22 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         setConnected(false)
       }
     } catch (e) {
-      console.log('Failed to connect to WebSocket, retrying...')
+      console.log('Failed to connect to WebSocket')
       setConnected(false)
-      // Retry connection after 5 seconds
-      reconnectTimeoutRef.current = setTimeout(() => {
-        connect()
-      }, 5000)
+      // Retry connection with exponential backoff
+      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        const delay = Math.min(
+          BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttemptsRef.current),
+          MAX_RECONNECT_DELAY
+        )
+        console.log(`Retrying in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1}/${MAX_RECONNECT_ATTEMPTS})`)
+        reconnectAttemptsRef.current++
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connect()
+        }, delay)
+      } else {
+        console.log('Max reconnect attempts reached, giving up')
+      }
     }
   }, [options.serverIds, options.onMessage])
 
@@ -97,8 +124,15 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       wsRef.current.close()
       wsRef.current = null
     }
+    reconnectAttemptsRef.current = 0
     setConnected(false)
   }, [])
+
+  const reconnect = useCallback(() => {
+    disconnect()
+    reconnectAttemptsRef.current = 0
+    connect()
+  }, [connect, disconnect])
 
   const subscribe = useCallback((serverIds: number[]) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -128,5 +162,6 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     metrics,
     subscribe,
     disconnect,
+    reconnect,
   }
 }

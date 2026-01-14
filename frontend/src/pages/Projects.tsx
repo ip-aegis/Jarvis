@@ -1,7 +1,13 @@
 import { useState, useEffect } from 'react'
 import { Plus, FolderGit2, ExternalLink, RefreshCw, Trash2, Search, Loader2 } from 'lucide-react'
 import ChatPanel from '../components/chat/ChatPanel'
-import { api, Project as ProjectType, Server } from '../services/api'
+import { api } from '../services/api'
+
+interface ServerInfo {
+  id: number
+  hostname: string
+  ip_address: string
+}
 
 interface Project {
   id: number
@@ -18,7 +24,7 @@ interface Project {
 export default function Projects() {
   const [sessionId] = useState(() => `projects-${Date.now()}`)
   const [projects, setProjects] = useState<Project[]>([])
-  const [servers, setServers] = useState<Server[]>([])
+  const [servers, setServers] = useState<ServerInfo[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState<number | null>(null)

@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts'
-import api from '../api/client'
+import { api } from '../services/api'
 
 // Types
 interface FeatureUsage {
@@ -144,26 +144,26 @@ export default function Usage() {
     setLoading(true)
     setError(null)
     try {
-      const [summaryRes, trendsRes, historyRes, monthlyRes, detailedRes] = await Promise.all([
-        api.get<UsageSummary>(`/api/usage/summary?hours=${timeRange}`),
-        api.get<UsageTrends>(`/api/usage/trends?hours=${timeRange}`),
+      const [summaryData, trendsData, historyData, monthlyData, detailedData] = await Promise.all([
+        api.getUsageSummary(timeRange),
+        api.getUsageTrends(timeRange),
         timeRange <= 168
-          ? api.get<HourlyUsage[]>(`/api/usage/history?hours=${timeRange}`)
-          : api.get<DailyUsage[]>(`/api/usage/daily-history?days=${Math.ceil(timeRange / 24)}`),
-        api.get<MonthlyUsage[]>('/api/usage/monthly-history?months=12'),
-        api.get<DetailedUsage[]>(`/api/usage/by-feature?hours=${timeRange}`),
+          ? api.getUsageHistory(timeRange)
+          : api.getUsageDailyHistory(Math.ceil(timeRange / 24)),
+        api.getUsageMonthlyHistory(12),
+        api.getUsageByFeature(timeRange),
       ])
-      setSummary(summaryRes.data)
-      setTrends(trendsRes.data)
+      setSummary(summaryData)
+      setTrends(trendsData)
       if (timeRange <= 168) {
-        setHourlyHistory(historyRes.data as HourlyUsage[])
+        setHourlyHistory(historyData as HourlyUsage[])
         setDailyHistory([])
       } else {
-        setDailyHistory(historyRes.data as DailyUsage[])
+        setDailyHistory(historyData as DailyUsage[])
         setHourlyHistory([])
       }
-      setMonthlyHistory(monthlyRes.data)
-      setDetailedUsage(detailedRes.data)
+      setMonthlyHistory(monthlyData)
+      setDetailedUsage(detailedData)
     } catch (err) {
       console.error('Failed to fetch usage data:', err)
       setError('Failed to load usage data')

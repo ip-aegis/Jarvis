@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Server, Activity, FolderGit2, AlertTriangle, Clock, Folder, Bell, Zap, DollarSign } from 'lucide-react'
-import api from '../api/client'
+import { api } from '../services/api'
 
 interface DashboardStats {
   servers: number
@@ -46,14 +46,14 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statsRes, activityRes, usageRes] = await Promise.all([
-          api.get('/api/dashboard/stats'),
-          api.get('/api/dashboard/activity'),
-          api.get('/api/usage/summary', { params: { hours: 24 } }),
+        const [statsData, activityData, usageData] = await Promise.all([
+          api.getDashboardStats(),
+          api.getDashboardActivity(),
+          api.getUsageSummary(24),
         ])
-        setStats(statsRes.data)
-        setActivities(activityRes.data.activities || [])
-        setUsage(usageRes.data)
+        setStats(statsData)
+        setActivities(activityData.activities || [])
+        setUsage(usageData)
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error)
       } finally {

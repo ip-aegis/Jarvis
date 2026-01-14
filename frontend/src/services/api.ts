@@ -61,6 +61,7 @@ import type {
   DnsClientProfile,
   DnsDomainReputation,
   DnsDetectionResult,
+  DnsRewrite,
 } from '../types'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -204,6 +205,10 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, session_id: sessionId, context, history }),
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to send message')
+    }
     const data = await response.json()
     return data.response
   }
@@ -334,6 +339,10 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action_id: actionId }),
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to confirm action')
+    }
     return response.json()
   }
 
@@ -341,6 +350,10 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/api/actions/cancel/${actionId}`, {
       method: 'POST',
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to cancel action')
+    }
     return response.json()
   }
 
@@ -388,6 +401,10 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/api/actions/rollback/${actionId}`, {
       method: 'POST',
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to rollback action')
+    }
     return response.json()
   }
 
@@ -433,6 +450,10 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/api/actions/scheduled/${jobId}/pause`, {
       method: 'POST',
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to pause scheduled action')
+    }
     return response.json()
   }
 
@@ -440,6 +461,10 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/api/actions/scheduled/${jobId}/resume`, {
       method: 'POST',
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to resume scheduled action')
+    }
     return response.json()
   }
 
@@ -447,6 +472,10 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/api/actions/scheduled/${jobId}`, {
       method: 'DELETE',
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to delete scheduled action')
+    }
     return response.json()
   }
 
@@ -536,6 +565,9 @@ class ApiService {
     success: boolean
     error?: string
     snapshot_url?: string
+    filename?: string
+    device_name?: string
+    timestamp?: string
     recordings?: Array<{ id: string; url: string; created_at: string; type: string }>
   }> {
     const response = await fetch(`${this.baseUrl}/api/home/devices/${deviceId}/action`, {
@@ -543,6 +575,10 @@ class ApiService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(action),
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to execute device action')
+    }
     return response.json()
   }
 
@@ -616,6 +652,10 @@ class ApiService {
     const response = await fetch(`${this.baseUrl}/api/home/events/${eventId}/acknowledge`, {
       method: 'POST',
     })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to acknowledge event')
+    }
     return response.json()
   }
 
@@ -624,6 +664,10 @@ class ApiService {
       ? `${this.baseUrl}/api/home/events/acknowledge-all?device_id=${deviceId}`
       : `${this.baseUrl}/api/home/events/acknowledge-all`
     const response = await fetch(url, { method: 'POST' })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to acknowledge events')
+    }
     return response.json()
   }
 
@@ -1518,7 +1562,7 @@ class ApiService {
     return response.json()
   }
 
-  async getClientBaseline(clientIp: string): Promise<{
+  async getClientBaseline(clientIp: string, days: number = 7): Promise<{
     client_ip: string
     baseline: DnsClientProfile | null
     comparison: {
@@ -1527,7 +1571,11 @@ class ApiService {
       unusual_hours_activity: boolean
     } | null
   }> {
-    const response = await fetch(`${this.baseUrl}/api/dns/analytics/client/${encodeURIComponent(clientIp)}/baseline`)
+    const response = await fetch(`${this.baseUrl}/api/dns/analytics/client/${encodeURIComponent(clientIp)}/baseline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days })
+    })
     if (!response.ok) throw new Error('Failed to fetch client baseline')
     return response.json()
   }
@@ -1659,6 +1707,195 @@ class ApiService {
       const error = await response.json()
       throw new Error(error.detail || 'Failed to get recommendations')
     }
+    return response.json()
+  }
+
+  // =============================================================================
+  // Dashboard
+  // =============================================================================
+
+  async getDashboardStats(): Promise<{
+    servers: number
+    online: number
+    projects: number
+    alerts: number
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/dashboard/stats`)
+    if (!response.ok) throw new Error('Failed to fetch dashboard stats')
+    return response.json()
+  }
+
+  async getDashboardActivity(): Promise<{
+    activities: Array<{
+      type: string
+      message: string
+      timestamp: string | null
+      icon: string
+    }>
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/dashboard/activity`)
+    if (!response.ok) throw new Error('Failed to fetch dashboard activity')
+    return response.json()
+  }
+
+  // =============================================================================
+  // Usage Analytics
+  // =============================================================================
+
+  async getUsageSummary(hours: number = 24): Promise<{
+    period_hours: number
+    request_count: number
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    total_cost_cents: number
+    total_cost_dollars: number
+    by_feature: Array<{
+      feature: string
+      request_count: number
+      total_tokens: number
+      cost_cents: number
+    }>
+    by_model: Array<{
+      model: string
+      request_count: number
+      total_tokens: number
+      cost_cents: number
+    }>
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/usage/summary?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch usage summary')
+    return response.json()
+  }
+
+  async getUsageHourly(hours: number = 24): Promise<Array<{
+    timestamp: string | null
+    request_count: number
+    total_tokens: number
+    cost_cents: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/hourly?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch hourly usage')
+    return response.json()
+  }
+
+  async getUsageDaily(days: number = 30): Promise<Array<{
+    date: string | null
+    request_count: number
+    total_tokens: number
+    prompt_tokens: number
+    completion_tokens: number
+    cost_cents: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/daily?days=${days}`)
+    if (!response.ok) throw new Error('Failed to fetch daily usage')
+    return response.json()
+  }
+
+  async getUsageMonthly(): Promise<Array<{
+    year: number | null
+    month: number | null
+    month_name: string | null
+    year_month: string | null
+    request_count: number
+    total_tokens: number
+    prompt_tokens: number
+    completion_tokens: number
+    cost_cents: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/monthly`)
+    if (!response.ok) throw new Error('Failed to fetch monthly usage')
+    return response.json()
+  }
+
+  async exportUsageCSV(days: number = 30): Promise<Blob> {
+    const response = await fetch(`${this.baseUrl}/api/usage/export?days=${days}`)
+    if (!response.ok) throw new Error('Failed to export usage data')
+    return response.blob()
+  }
+
+  async getUsageTrends(hours: number = 168): Promise<{
+    period_hours: number
+    current_period: {
+      start: string
+      end: string
+      request_count: number
+      total_tokens: number
+      cost_cents: number
+      cost_dollars: number
+    }
+    previous_period: {
+      start: string
+      end: string
+      request_count: number
+      total_tokens: number
+      cost_cents: number
+      cost_dollars: number
+    }
+    percent_change: {
+      request_count: number
+      total_tokens: number
+      cost: number
+    }
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/usage/trends?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch usage trends')
+    return response.json()
+  }
+
+  async getUsageHistory(hours: number = 24): Promise<Array<{
+    timestamp: string | null
+    request_count: number
+    total_tokens: number
+    cost_cents: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/history?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch usage history')
+    return response.json()
+  }
+
+  async getUsageDailyHistory(days: number = 30): Promise<Array<{
+    date: string | null
+    request_count: number
+    total_tokens: number
+    prompt_tokens: number
+    completion_tokens: number
+    cost_cents: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/daily-history?days=${days}`)
+    if (!response.ok) throw new Error('Failed to fetch daily usage history')
+    return response.json()
+  }
+
+  async getUsageMonthlyHistory(months: number = 12): Promise<Array<{
+    year: number | null
+    month: number | null
+    month_name: string | null
+    year_month: string | null
+    request_count: number
+    total_tokens: number
+    prompt_tokens: number
+    completion_tokens: number
+    cost_cents: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/monthly-history?months=${months}`)
+    if (!response.ok) throw new Error('Failed to fetch monthly usage history')
+    return response.json()
+  }
+
+  async getUsageByFeature(hours: number = 168): Promise<Array<{
+    feature: string
+    function_name: string | null
+    model: string | null
+    request_count: number
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+    cost_cents: number
+    avg_tokens_per_request: number
+  }>> {
+    const response = await fetch(`${this.baseUrl}/api/usage/by-feature?hours=${hours}`)
+    if (!response.ok) throw new Error('Failed to fetch usage by feature')
     return response.json()
   }
 }

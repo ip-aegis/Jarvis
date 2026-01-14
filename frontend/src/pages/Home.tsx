@@ -75,7 +75,6 @@ export default function Home() {
   const [platforms, setPlatforms] = useState<HomePlatformStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<DeviceTypeFilter>('all')
-  const [showPlatformSetup, setShowPlatformSetup] = useState(false)
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback | null>(null)
   const [actionLoading, setActionLoading] = useState<number | null>(null)
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null)
@@ -291,13 +290,6 @@ export default function Home() {
               title="Refresh devices"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-            <button
-              onClick={() => setShowPlatformSetup(true)}
-              className="magnetic-button-primary flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Connect Platform
             </button>
           </div>
         </div>
@@ -887,46 +879,9 @@ export default function Home() {
           <div className="magnetic-card text-center py-12">
             <HomeIcon className="w-16 h-16 text-surface-500 mx-auto mb-4" />
             <h2 className="text-xl font-medium text-white mb-2">No devices connected</h2>
-            <p className="text-surface-400 mb-6">
-              Connect a platform to start managing your smart home devices
+            <p className="text-surface-400">
+              Configure smart home platform credentials in the backend environment to connect devices.
             </p>
-            <button
-              onClick={() => setShowPlatformSetup(true)}
-              className="magnetic-button-primary"
-            >
-              Connect Platform
-            </button>
-          </div>
-        )}
-
-        {/* Platform setup modal placeholder */}
-        {showPlatformSetup && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="magnetic-card w-full max-w-md">
-              <h2 className="text-xl font-medium text-white mb-4">Connect Platform</h2>
-              <p className="text-surface-400 mb-6">
-                Platform setup coming soon. Available platforms:
-              </p>
-              <div className="space-y-2 mb-6">
-                {platforms.map((platform) => (
-                  <div
-                    key={platform.id}
-                    className="flex items-center justify-between p-3 bg-surface-600 rounded-magnetic"
-                  >
-                    <span className="text-white">{platform.name}</span>
-                    <span className={`text-sm ${platform.connected ? 'text-success' : 'text-surface-400'}`}>
-                      {platform.connected ? 'Connected' : 'Not connected'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <button
-                onClick={() => setShowPlatformSetup(false)}
-                className="magnetic-button-secondary w-full"
-              >
-                Close
-              </button>
-            </div>
           </div>
         )}
 

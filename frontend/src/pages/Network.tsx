@@ -13,7 +13,6 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronRight,
-  Settings,
   Trash2,
 } from 'lucide-react'
 import ChatPanel from '../components/chat/ChatPanel'
@@ -300,15 +299,6 @@ export default function Network() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                // TODO: Open device settings
-                              }}
-                              className="p-1.5 rounded hover:bg-surface-500 text-surface-400 hover:text-white"
-                            >
-                              <Settings className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
                                 handleDeleteDevice(device.id)
                               }}
                               className="p-1.5 rounded hover:bg-error/20 text-surface-400 hover:text-error"
@@ -454,7 +444,7 @@ function NetworkOnboardingModal({ onClose, onSuccess }: NetworkOnboardingModalPr
     name: '',
     ip_address: '',
     device_type: 'switch' as 'switch' | 'router' | 'firewall' | 'access_point',
-    connection_type: 'snmp' as 'snmp' | 'rest_api' | 'unifi' | 'ssh',
+    connection_type: 'snmp' as const,
     snmp_version: '2c' as '2c' | '3',
     snmp_community: 'public',
     snmp_username: '',
@@ -546,23 +536,10 @@ function NetworkOnboardingModal({ onClose, onSuccess }: NetworkOnboardingModalPr
                 <option value="access_point">Access Point</option>
               </select>
             </div>
-            <div>
-              <label className="block text-sm text-surface-300 mb-1">Connection Type</label>
-              <select
-                value={formData.connection_type}
-                onChange={(e) => setFormData({ ...formData, connection_type: e.target.value as any })}
-                className="w-full bg-surface-600 border border-surface-500 rounded-magnetic px-3 py-2 text-white focus:border-primary focus:outline-none"
-              >
-                <option value="snmp">SNMP</option>
-                <option value="ssh">SSH</option>
-                <option value="rest_api">REST API</option>
-                <option value="unifi">UniFi Controller</option>
-              </select>
-            </div>
           </div>
         )}
 
-        {step === 2 && formData.connection_type === 'snmp' && (
+        {step === 2 && (
           <div className="space-y-4">
             <div>
               <label className="block text-sm text-surface-300 mb-1">SNMP Version</label>
@@ -644,14 +621,6 @@ function NetworkOnboardingModal({ onClose, onSuccess }: NetworkOnboardingModalPr
                 </div>
               </>
             )}
-          </div>
-        )}
-
-        {step === 2 && formData.connection_type !== 'snmp' && (
-          <div className="text-surface-300 text-sm">
-            {formData.connection_type === 'ssh' && 'SSH connection configuration will be added in a future update.'}
-            {formData.connection_type === 'rest_api' && 'REST API configuration will be added in a future update.'}
-            {formData.connection_type === 'unifi' && 'UniFi Controller integration will be added in a future update.'}
           </div>
         )}
 
