@@ -1,9 +1,10 @@
 """DNS Service for interacting with AdGuard Home API."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 from tenacity import (
     retry,
@@ -163,6 +164,47 @@ class DnsService:
             }
         return {"running": False, "error": "Unable to connect to AdGuard Home"}
 
+    async def get_global_settings(self) -> dict:
+        """Get global DNS filtering settings from AdGuard Home."""
+        # Fetch safebrowsing status
+        safebrowsing = await self._request("GET", "/control/safebrowsing/status")
+        # Fetch parental control status
+        parental = await self._request("GET", "/control/parental/status")
+        # Fetch safe search status
+        safesearch = await self._request("GET", "/control/safesearch/status")
+        # Fetch globally blocked services
+        blocked_services = await self._request("GET", "/control/blocked_services/list")
+
+        return {
+            "safebrowsing_enabled": safebrowsing.get("enabled", False) if safebrowsing else False,
+            "parental_enabled": parental.get("enabled", False) if parental else False,
+            "safesearch_enabled": safesearch.get("enabled", False) if safesearch else False,
+            "blocked_services": blocked_services if isinstance(blocked_services, list) else [],
+        }
+
+    async def set_global_safebrowsing(self, enabled: bool) -> bool:
+        """Enable or disable global safe browsing."""
+        endpoint = "/control/safebrowsing/enable" if enabled else "/control/safebrowsing/disable"
+        result = await self._request("POST", endpoint)
+        return result is not None
+
+    async def set_global_parental(self, enabled: bool) -> bool:
+        """Enable or disable global parental control."""
+        endpoint = "/control/parental/enable" if enabled else "/control/parental/disable"
+        result = await self._request("POST", endpoint)
+        return result is not None
+
+    async def set_global_safesearch(self, enabled: bool) -> bool:
+        """Enable or disable global safe search."""
+        data = {"enabled": enabled}
+        result = await self._request("PUT", "/control/safesearch/settings", data)
+        return result is not None
+
+    async def set_global_blocked_services(self, services: list[str]) -> bool:
+        """Set globally blocked services."""
+        result = await self._request("POST", "/control/blocked_services/set", services)
+        return result is not None
+
     async def health_check(self) -> bool:
         """Check if AdGuard Home is accessible."""
         try:
@@ -177,7 +219,140 @@ class DnsService:
     # =========================================================================
 
     async def get_stats(self, hours: int = 24) -> dict:
-        """Get DNS query statistics."""
+        """Get DNS query statistics for the specified time range.
+
+        Uses pre-aggregated hourly stats from DnsStats table for performance.
+        """
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        db = SessionLocal()
+
+        try:
+            # Query pre-aggregated hourly stats, deduplicated by timestamp
+            # Use subquery to get only the latest entry per hour (by highest id)
+            from sqlalchemy import distinct
+            from sqlalchemy.orm import aliased
+
+            # Get distinct timestamps with their max id
+            subq = (
+                db.query(
+                    DnsStats.timestamp,
+                    func.max(DnsStats.id).label("max_id")
+                )
+                .filter(DnsStats.period == "hour")
+                .filter(DnsStats.timestamp >= cutoff)
+                .group_by(DnsStats.timestamp)
+                .subquery()
+            )
+
+            # Join back to get the full rows for those max ids
+            hourly_rows = (
+                db.query(DnsStats)
+                .join(subq, DnsStats.id == subq.c.max_id)
+                .order_by(DnsStats.timestamp)
+                .all()
+            )
+
+            if not hourly_rows:
+                # Fall back to AdGuard if no aggregated data
+                db.close()
+                return await self._get_stats_from_adguard()
+
+            # Sum up totals from hourly aggregates (now deduplicated)
+            total_queries = sum(r.total_queries or 0 for r in hourly_rows)
+            blocked_queries = sum(r.blocked_queries or 0 for r in hourly_rows)
+            cached_queries = sum(r.cached_queries or 0 for r in hourly_rows)
+
+            # Weighted average response time
+            total_weighted_rt = sum(
+                (r.avg_response_time or 0) * (r.total_queries or 0)
+                for r in hourly_rows
+            )
+            avg_response_time = total_weighted_rt / total_queries if total_queries > 0 else 0
+
+            # Aggregate top domains across all hours
+            domain_counts: dict[str, int] = {}
+            blocked_counts: dict[str, int] = {}
+            client_counts: dict[str, int] = {}
+
+            for row in hourly_rows:
+                if row.top_domains:
+                    for item in row.top_domains:
+                        domain = item.get("domain", "")
+                        count = item.get("count", 0)
+                        domain_counts[domain] = domain_counts.get(domain, 0) + count
+
+                if row.top_blocked:
+                    for item in row.top_blocked:
+                        domain = item.get("domain", "")
+                        count = item.get("count", 0)
+                        blocked_counts[domain] = blocked_counts.get(domain, 0) + count
+
+                if row.top_clients:
+                    for item in row.top_clients:
+                        client = item.get("domain", "")  # stored as "domain" in JSON
+                        count = item.get("count", 0)
+                        client_counts[client] = client_counts.get(client, 0) + count
+
+            # Sort and take top 10
+            top_domains = [
+                {"domain": d, "count": c}
+                for d, c in sorted(domain_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            ]
+            top_blocked = [
+                {"domain": d, "count": c}
+                for d, c in sorted(blocked_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            ]
+            top_clients = [
+                {"domain": c, "count": cnt}
+                for c, cnt in sorted(client_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            ]
+
+            # Build time series arrays
+            queries_over_time = []
+            blocked_over_time = []
+
+            # Create lookup by timestamp
+            stats_by_hour = {row.timestamp: row for row in hourly_rows}
+
+            # Generate all hours in the range
+            current = cutoff.replace(minute=0, second=0, microsecond=0)
+            end = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+
+            while current <= end:
+                row = stats_by_hour.get(current)
+                queries_over_time.append(row.total_queries if row else 0)
+                blocked_over_time.append(row.blocked_queries if row else 0)
+                current += timedelta(hours=1)
+
+            # Get cache size from AdGuard
+            dns_info = await self._request("GET", "/control/dns_info")
+            cache_size = dns_info.get("cache_size", 0) if dns_info else 0
+
+        except Exception as e:
+            logger.error("get_stats_error", error=str(e))
+            db.close()
+            return await self._get_stats_from_adguard()
+        finally:
+            db.close()
+
+        return {
+            "total_queries": total_queries,
+            "blocked_queries": blocked_queries,
+            "blocked_percentage": (
+                round(blocked_queries / total_queries * 100, 1) if total_queries > 0 else 0
+            ),
+            "cached_queries": cached_queries,
+            "cache_size": cache_size,
+            "avg_response_time": round(avg_response_time, 2) if avg_response_time else 0,
+            "top_domains": top_domains,
+            "top_blocked": top_blocked,
+            "top_clients": top_clients,
+            "queries_over_time": queries_over_time,
+            "blocked_over_time": blocked_over_time,
+        }
+
+    async def _get_stats_from_adguard(self) -> dict:
+        """Fallback to get stats directly from AdGuard (no time filtering)."""
         result = await self._request("GET", "/control/stats")
         if not result:
             return {}
@@ -206,37 +381,14 @@ class DnsService:
         top_blocked = transform_top_list(result.get("top_blocked_domains", []))[:10]
         top_clients = transform_top_list(result.get("top_clients", []))[:10]
 
-        # Get cache statistics from dns_info endpoint and database
-        dns_info = await self._request("GET", "/control/dns_info")
-        cache_size = dns_info.get("cache_size", 0) if dns_info else 0
-
-        # Calculate cache hits from our synced query log
-        cache_hits = 0
-        try:
-            from datetime import datetime, timedelta
-
-            from sqlalchemy import func
-
-            cutoff = datetime.utcnow() - timedelta(hours=hours)
-            db = SessionLocal()
-            cache_hits = (
-                db.query(func.count(DnsQueryLog.id))
-                .filter(DnsQueryLog.timestamp >= cutoff)
-                .filter(DnsQueryLog.cached == True)
-                .scalar()
-            ) or 0
-            db.close()
-        except Exception as e:
-            logger.warning("cache_stats_error", error=str(e))
-
         return {
             "total_queries": total_queries,
             "blocked_queries": blocked_queries,
             "blocked_percentage": (
                 round(blocked_queries / total_queries * 100, 1) if total_queries > 0 else 0
             ),
-            "cached_queries": cache_hits,
-            "cache_size": cache_size,
+            "cached_queries": 0,
+            "cache_size": 0,
             "avg_response_time": avg_response_time,
             "top_domains": top_domains,
             "top_blocked": top_blocked,
@@ -530,6 +682,54 @@ class DnsService:
         )
         return result is not None
 
+    async def get_blocked_services_list(self) -> list[dict]:
+        """Get list of all available services that can be blocked.
+
+        Returns:
+            List of service objects with id and name fields.
+        """
+        result = await self._request("GET", "/control/blocked_services/services")
+
+        # Fallback list of common services
+        fallback_services = [
+            {"id": "facebook", "name": "Facebook"},
+            {"id": "instagram", "name": "Instagram"},
+            {"id": "tiktok", "name": "TikTok"},
+            {"id": "twitter", "name": "Twitter"},
+            {"id": "youtube", "name": "YouTube"},
+            {"id": "netflix", "name": "Netflix"},
+            {"id": "snapchat", "name": "Snapchat"},
+            {"id": "discord", "name": "Discord"},
+            {"id": "twitch", "name": "Twitch"},
+            {"id": "reddit", "name": "Reddit"},
+            {"id": "spotify", "name": "Spotify"},
+            {"id": "pinterest", "name": "Pinterest"},
+            {"id": "amazon", "name": "Amazon"},
+            {"id": "ebay", "name": "eBay"},
+            {"id": "steam", "name": "Steam"},
+            {"id": "epic_games", "name": "Epic Games"},
+            {"id": "origin", "name": "EA Origin"},
+            {"id": "telegram", "name": "Telegram"},
+            {"id": "whatsapp", "name": "WhatsApp"},
+            {"id": "viber", "name": "Viber"},
+        ]
+
+        # Use fallback if result is None, empty, or not a list
+        if not result or not isinstance(result, list):
+            return fallback_services
+
+        # Normalize response format - AdGuard may return {id, name, icon_svg}
+        # Ensure we always return {id, name} format
+        normalized = []
+        for s in result:
+            if isinstance(s, dict):
+                normalized.append({"id": s.get("id", ""), "name": s.get("name", s.get("id", ""))})
+            else:
+                # Handle case where service is just a string
+                normalized.append({"id": str(s), "name": str(s)})
+
+        return normalized if normalized else fallback_services
+
     # =========================================================================
     # DNS Configuration
     # =========================================================================
@@ -538,6 +738,116 @@ class DnsService:
         """Get DNS server configuration."""
         result = await self._request("GET", "/control/dns_info")
         return result or {}
+
+    async def get_full_dns_config(self) -> dict:
+        """Get comprehensive DNS configuration including DNSSEC, cache, and blocking mode."""
+        result = await self._request("GET", "/control/dns_info")
+        if not result:
+            return {}
+
+        return {
+            "dnssec_enabled": result.get("dnssec_enabled", False),
+            "cache_size": result.get("cache_size", 4194304),  # Default 4MB
+            "cache_ttl_min": result.get("cache_ttl_min", 0),
+            "cache_ttl_max": result.get("cache_ttl_max", 86400),
+            "cache_optimistic": result.get("cache_optimistic", False),
+            "blocking_mode": result.get("blocking_mode", "default"),
+            "blocking_ipv4": result.get("blocking_ipv4", ""),
+            "blocking_ipv6": result.get("blocking_ipv6", ""),
+            "edns_cs_enabled": result.get("edns_cs_enabled", False),
+            "edns_cs_use_custom": result.get("edns_cs_use_custom", False),
+            "edns_cs_custom_ip": result.get("edns_cs_custom_ip", ""),
+            "disable_ipv6": result.get("disable_ipv6", False),
+            "upstream_dns": result.get("upstream_dns", []),
+            "bootstrap_dns": result.get("bootstrap_dns", []),
+            "ratelimit": result.get("ratelimit", 0),
+        }
+
+    async def set_dns_server_config(self, config: dict) -> bool:
+        """Update DNS server configuration (DNSSEC, cache, blocking mode, etc.).
+
+        Args:
+            config: Dictionary with configuration options. Valid keys:
+                - dnssec_enabled: bool
+                - cache_size: int (bytes)
+                - cache_ttl_min: int (seconds)
+                - cache_ttl_max: int (seconds)
+                - cache_optimistic: bool
+                - blocking_mode: str ("default", "refused", "nxdomain", "null_ip", "custom_ip")
+                - blocking_ipv4: str (IP address for custom_ip mode)
+                - blocking_ipv6: str (IP address for custom_ip mode)
+                - disable_ipv6: bool
+                - ratelimit: int (queries per second, 0 = unlimited)
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        result = await self._request("POST", "/control/dns_config", config)
+        return result is not None
+
+    async def get_safesearch_config(self) -> dict:
+        """Get per-engine safe search configuration."""
+        result = await self._request("GET", "/control/safesearch/status")
+        if not result:
+            return {"enabled": False}
+
+        return {
+            "enabled": result.get("enabled", False),
+            "bing": result.get("bing", True),
+            "duckduckgo": result.get("duckduckgo", True),
+            "google": result.get("google", True),
+            "pixabay": result.get("pixabay", True),
+            "yandex": result.get("yandex", True),
+            "youtube": result.get("youtube", True),
+        }
+
+    async def set_safesearch_config(self, config: dict) -> bool:
+        """Set per-engine safe search configuration.
+
+        Args:
+            config: Dictionary with safe search options:
+                - enabled: bool (master toggle)
+                - google: bool
+                - bing: bool
+                - youtube: bool
+                - duckduckgo: bool
+                - yandex: bool
+                - pixabay: bool
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        result = await self._request("PUT", "/control/safesearch/settings", config)
+        return result is not None
+
+    async def get_querylog_config(self) -> dict:
+        """Get query log configuration."""
+        result = await self._request("GET", "/control/querylog/config")
+        if not result:
+            return {}
+
+        return {
+            "enabled": result.get("enabled", True),
+            "interval": result.get("interval", 2160),  # Default 90 days in hours
+            "anonymize_client_ip": result.get("anonymize_client_ip", False),
+            "ignored": result.get("ignored", []),
+        }
+
+    async def set_querylog_config(self, config: dict) -> bool:
+        """Set query log configuration.
+
+        Args:
+            config: Dictionary with query log options:
+                - enabled: bool
+                - interval: int (retention in hours: 1, 24, 168, 720, 2160)
+                - anonymize_client_ip: bool
+                - ignored: list[str] (domains to ignore)
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        result = await self._request("PUT", "/control/querylog/config/update", config)
+        return result is not None
 
     async def set_upstream_dns(self, upstreams: list[str], bootstrap: list[str] = None) -> bool:
         """Set upstream DNS servers."""
@@ -597,25 +907,100 @@ class DnsService:
                 db.add(blocklist)
         db.commit()
 
-    async def sync_clients_to_db(self, db: Session) -> None:
-        """Sync clients from AdGuard to database."""
-        clients_data = await self.get_clients()
+    async def sync_clients_to_db(self, db: Session) -> int:
+        """Sync clients from AdGuard stats to database.
 
-        for client in clients_data.get("auto_clients", []):
-            ip = client.get("ip", "")
+        Uses top_clients from stats (actual DNS query sources) rather than
+        auto_clients (ARP/hosts discovery) to get real client activity.
+
+        Returns:
+            Number of clients synced.
+        """
+        stats = await self.get_stats()
+        top_clients = stats.get("top_clients", [])
+
+        count = 0
+        for client_data in top_clients:
+            # AdGuard uses "domain" key for client IP in top_clients
+            ip = client_data.get("domain", "")
+            if not ip:
+                continue
+
+            query_count = client_data.get("count", 0)
+
             existing = db.query(DnsClient).filter_by(client_id=ip).first()
             if existing:
-                existing.name = client.get("name", existing.name)
+                existing.queries_count = query_count
                 existing.last_seen = datetime.utcnow()
             else:
                 dns_client = DnsClient(
                     client_id=ip,
-                    name=client.get("name"),
                     ip_addresses=[ip],
+                    queries_count=query_count,
                     last_seen=datetime.utcnow(),
                 )
                 db.add(dns_client)
+            count += 1
+
         db.commit()
+        logger.info("clients_synced_from_stats", count=count)
+        return count
+
+    async def aggregate_client_stats(self, db: Session, hours: int = 24) -> int:
+        """Aggregate query counts per client from stored query logs.
+
+        This provides more accurate per-client statistics including blocked
+        counts, which aren't available from the top_clients stats.
+
+        Args:
+            db: Database session
+            hours: Hours of query log history to aggregate
+
+        Returns:
+            Number of clients updated.
+        """
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+
+        # Aggregate query counts per client from query log
+        results = (
+            db.query(
+                DnsQueryLog.client_ip,
+                func.count().label("total"),
+                func.sum(case((DnsQueryLog.status == "blocked", 1), else_=0)).label("blocked"),
+            )
+            .filter(DnsQueryLog.timestamp >= cutoff)
+            .group_by(DnsQueryLog.client_ip)
+            .all()
+        )
+
+        count = 0
+        for client_ip, total, blocked in results:
+            if not client_ip:
+                continue
+
+            blocked_count = blocked or 0
+
+            client = db.query(DnsClient).filter_by(client_id=client_ip).first()
+            if client:
+                client.queries_count = total
+                client.blocked_count = blocked_count
+                client.last_seen = datetime.utcnow()
+            else:
+                # Create new client from query activity
+                db.add(
+                    DnsClient(
+                        client_id=client_ip,
+                        ip_addresses=[client_ip],
+                        queries_count=total,
+                        blocked_count=blocked_count,
+                        last_seen=datetime.utcnow(),
+                    )
+                )
+            count += 1
+
+        db.commit()
+        logger.info("client_stats_aggregated", clients=count, hours=hours)
+        return count
 
     async def sync_query_log_to_db(self, db: Session, limit: int = 1000) -> int:
         """Sync recent query log entries to database."""
@@ -653,24 +1038,124 @@ class DnsService:
         return count
 
     async def aggregate_stats(self, db: Session) -> None:
-        """Aggregate hourly statistics."""
-        stats = await self.get_stats(hours=1)
-        if not stats:
+        """Aggregate hourly statistics from raw query log.
+
+        Computes actual hourly stats from dns_query_log table, not AdGuard cumulative totals.
+        """
+        hour_timestamp = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+        hour_start = hour_timestamp
+        hour_end = hour_timestamp + timedelta(hours=1)
+
+        # Compute stats from raw query log for this hour
+        total_queries = (
+            db.query(func.count(DnsQueryLog.id))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .scalar()
+        ) or 0
+
+        if total_queries == 0:
+            # No queries this hour, skip
             return
 
-        stat_record = DnsStats(
-            timestamp=datetime.utcnow().replace(minute=0, second=0, microsecond=0),
-            period="hour",
-            total_queries=stats.get("total_queries", 0),
-            blocked_queries=stats.get("blocked_queries", 0),
-            cached_queries=stats.get("cached_queries", 0),
-            avg_response_time=stats.get("avg_response_time", 0),
-            top_domains=stats.get("top_domains", []),
-            top_blocked=stats.get("top_blocked", []),
-            top_clients=stats.get("top_clients", []),
+        blocked_queries = (
+            db.query(func.count(DnsQueryLog.id))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .filter(DnsQueryLog.status == "blocked")
+            .scalar()
+        ) or 0
+
+        cached_queries = (
+            db.query(func.count(DnsQueryLog.id))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .filter(DnsQueryLog.cached.is_(True))
+            .scalar()
+        ) or 0
+
+        avg_response_time = (
+            db.query(func.avg(DnsQueryLog.response_time_ms))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .filter(DnsQueryLog.response_time_ms.isnot(None))
+            .scalar()
+        ) or 0
+
+        # Top domains for this hour
+        top_domains_query = (
+            db.query(DnsQueryLog.domain, func.count(DnsQueryLog.id).label("count"))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .group_by(DnsQueryLog.domain)
+            .order_by(func.count(DnsQueryLog.id).desc())
+            .limit(10)
+            .all()
         )
-        db.add(stat_record)
+        top_domains = [{"domain": d, "count": c} for d, c in top_domains_query]
+
+        # Top blocked domains for this hour
+        top_blocked_query = (
+            db.query(DnsQueryLog.domain, func.count(DnsQueryLog.id).label("count"))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .filter(DnsQueryLog.status == "blocked")
+            .group_by(DnsQueryLog.domain)
+            .order_by(func.count(DnsQueryLog.id).desc())
+            .limit(10)
+            .all()
+        )
+        top_blocked = [{"domain": d, "count": c} for d, c in top_blocked_query]
+
+        # Top clients for this hour
+        top_clients_query = (
+            db.query(DnsQueryLog.client_ip, func.count(DnsQueryLog.id).label("count"))
+            .filter(DnsQueryLog.timestamp >= hour_start)
+            .filter(DnsQueryLog.timestamp < hour_end)
+            .group_by(DnsQueryLog.client_ip)
+            .order_by(func.count(DnsQueryLog.id).desc())
+            .limit(10)
+            .all()
+        )
+        top_clients = [{"domain": ip, "count": c} for ip, c in top_clients_query]
+
+        # Upsert the hourly stats
+        existing = (
+            db.query(DnsStats)
+            .filter(DnsStats.timestamp == hour_timestamp)
+            .filter(DnsStats.period == "hour")
+            .first()
+        )
+
+        if existing:
+            existing.total_queries = total_queries
+            existing.blocked_queries = blocked_queries
+            existing.cached_queries = cached_queries
+            existing.avg_response_time = round(avg_response_time, 2) if avg_response_time else 0
+            existing.top_domains = top_domains
+            existing.top_blocked = top_blocked
+            existing.top_clients = top_clients
+        else:
+            stat_record = DnsStats(
+                timestamp=hour_timestamp,
+                period="hour",
+                total_queries=total_queries,
+                blocked_queries=blocked_queries,
+                cached_queries=cached_queries,
+                avg_response_time=round(avg_response_time, 2) if avg_response_time else 0,
+                top_domains=top_domains,
+                top_blocked=top_blocked,
+                top_clients=top_clients,
+            )
+            db.add(stat_record)
+
         db.commit()
+        logger.info(
+            "hourly_stats_aggregated",
+            hour=hour_timestamp.isoformat(),
+            total=total_queries,
+            blocked=blocked_queries,
+        )
 
     # =========================================================================
     # Setup & Initialization

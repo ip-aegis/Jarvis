@@ -30,12 +30,24 @@ import {
   Upload,
   Link,
   Calendar,
+  X,
+  Edit2,
+  Play,
+  Pause,
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import ChatPanel from '../components/chat/ChatPanel'
+import InvestigationPreviewModal from '../components/security/InvestigationPreviewModal'
+import DomainAnalysisModal from '../components/security/DomainAnalysisModal'
+import { ClientDisplay, type ClientLookup } from '../components/shared/ClientDisplay'
 import { api } from '../services/api'
+import { formatDateTime, formatDate, formatShortDateTime, formatISODate } from '../utils/dateTime'
 import type {
   DnsStatus,
+  DnsGlobalSettings,
+  DnsServerConfig,
+  SafeSearchConfig,
+  QueryLogConfig,
   DnsStats,
   DnsBlocklist,
   DnsCustomRule,
@@ -44,9 +56,92 @@ import type {
   DnsSecurityAlert,
   DnsDomainReputation,
   DnsRewrite,
+  BlockedService,
+  DnsServiceSchedule,
 } from '../types'
 
-type TabType = 'dashboard' | 'security' | 'querylog' | 'blocklists' | 'rules' | 'rewrites' | 'clients' | 'chat'
+type TabType = 'dashboard' | 'security' | 'querylog' | 'blocklists' | 'rules' | 'rewrites' | 'clients' | 'settings' | 'chat'
+
+// Available client tags for device/OS/user classification
+const AVAILABLE_TAGS = {
+  device: [
+    { id: 'device_pc', label: 'PC', icon: '🖥️' },
+    { id: 'device_laptop', label: 'Laptop', icon: '💻' },
+    { id: 'device_phone', label: 'Phone', icon: '📱' },
+    { id: 'device_tablet', label: 'Tablet', icon: '📲' },
+    { id: 'device_tv', label: 'Smart TV', icon: '📺' },
+    { id: 'device_gameconsole', label: 'Game Console', icon: '🎮' },
+    { id: 'device_camera', label: 'Camera', icon: '📷' },
+    { id: 'device_nas', label: 'NAS', icon: '💾' },
+    { id: 'device_printer', label: 'Printer', icon: '🖨️' },
+    { id: 'device_other', label: 'Other', icon: '📟' },
+  ],
+  os: [
+    { id: 'os_windows', label: 'Windows', icon: '🪟' },
+    { id: 'os_macos', label: 'macOS', icon: '🍎' },
+    { id: 'os_linux', label: 'Linux', icon: '🐧' },
+    { id: 'os_android', label: 'Android', icon: '🤖' },
+    { id: 'os_ios', label: 'iOS', icon: '📱' },
+  ],
+  user: [
+    { id: 'user_admin', label: 'Admin', icon: '👨‍💼' },
+    { id: 'user_regular', label: 'Regular', icon: '👤' },
+    { id: 'user_child', label: 'Child', icon: '👶' },
+    { id: 'user_guest', label: 'Guest', icon: '🧑‍🤝‍🧑' },
+  ],
+}
+
+// Service categories for bulk selection
+const SERVICE_CATEGORIES: Record<string, { label: string; icon: string; services: string[] }> = {
+  social: {
+    label: 'Social Media',
+    icon: '👥',
+    services: ['facebook', 'instagram', 'twitter', 'tiktok', 'snapchat', 'linkedin', 'pinterest', 'reddit'],
+  },
+  video: {
+    label: 'Video/Streaming',
+    icon: '📺',
+    services: ['youtube', 'netflix', 'hulu', 'disneyplus', 'twitch', 'vimeo', 'dailymotion', 'ok'],
+  },
+  gaming: {
+    label: 'Gaming',
+    icon: '🎮',
+    services: ['steam', 'discord', 'epic_games', 'origin', 'battle_net', 'roblox', 'riot_games', 'minecraft'],
+  },
+  messaging: {
+    label: 'Messaging',
+    icon: '💬',
+    services: ['whatsapp', 'telegram', 'signal', 'skype', 'viber', 'line', 'wechat'],
+  },
+  shopping: {
+    label: 'Shopping',
+    icon: '🛒',
+    services: ['amazon', 'ebay', 'aliexpress', 'temu'],
+  },
+  music: {
+    label: 'Music',
+    icon: '🎵',
+    services: ['spotify', 'deezer', 'soundcloud', 'tidal'],
+  },
+}
+
+// Query log retention options
+const QUERY_LOG_INTERVALS = [
+  { value: 1, label: '1 hour' },
+  { value: 24, label: '1 day' },
+  { value: 168, label: '7 days' },
+  { value: 720, label: '30 days' },
+  { value: 2160, label: '90 days' },
+]
+
+// Blocking mode options
+const BLOCKING_MODES = [
+  { value: 'default', label: 'Default', description: 'Use AdGuard default blocking response' },
+  { value: 'refused', label: 'REFUSED', description: 'Return REFUSED DNS response code' },
+  { value: 'nxdomain', label: 'NXDOMAIN', description: 'Return non-existent domain response' },
+  { value: 'null_ip', label: 'Null IP', description: 'Return 0.0.0.0 for blocked domains' },
+  { value: 'custom_ip', label: 'Custom IP', description: 'Return a custom IP address' },
+]
 
 export default function DNS() {
   const [sessionId] = useState(() => `dns-${Date.now()}`)
@@ -57,7 +152,12 @@ export default function DNS() {
   const [rules, setRules] = useState<DnsCustomRule[]>([])
   const [clients, setClients] = useState<DnsClient[]>([])
   const [queryLog, setQueryLog] = useState<DnsQueryLogEntry[]>([])
+  const [clientLookup, setClientLookup] = useState<ClientLookup>({})
   const [error, setError] = useState<string | null>(null)
+
+  // Global settings state
+  const [globalSettings, setGlobalSettings] = useState<DnsGlobalSettings | null>(null)
+  const [globalSettingsLoading, setGlobalSettingsLoading] = useState(false)
 
   // Dashboard state
   const [timeRange, setTimeRange] = useState<24 | 168 | 720>(24) // hours: 24h, 7d, 30d
@@ -70,6 +170,8 @@ export default function DNS() {
   const [wsConnected, setWsConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const [selectedAlert, setSelectedAlert] = useState<DnsSecurityAlert | null>(null)
+  const [showInvestigationModal, setShowInvestigationModal] = useState(false)
+  const [investigateAlert, setInvestigateAlert] = useState<DnsSecurityAlert | null>(null)
   const [domainLookup, setDomainLookup] = useState('')
   const [domainReputation, setDomainReputation] = useState<DnsDomainReputation | null>(null)
   const [lookupLoading, setLookupLoading] = useState(false)
@@ -79,6 +181,7 @@ export default function DNS() {
   const [queryLogSearch, setQueryLogSearch] = useState('')
   const [queryLogFilter, setQueryLogFilter] = useState<'all' | 'allowed' | 'blocked'>('all')
   const [queryLogClientFilter, setQueryLogClientFilter] = useState('')
+  const [analyzeDomain, setAnalyzeDomain] = useState<string | null>(null)
 
   // Blocklist form states
   const [showAddBlocklist, setShowAddBlocklist] = useState(false)
@@ -102,6 +205,8 @@ export default function DNS() {
   const [selectedClient, setSelectedClient] = useState<DnsClient | null>(null)
   const [clientUpdateLoading, setClientUpdateLoading] = useState(false)
   const [editClientName, setEditClientName] = useState('')
+  const [availableServices, setAvailableServices] = useState<BlockedService[]>([])
+  const [servicesLoading, setServicesLoading] = useState(false)
 
   // DNS Rewrites (Custom DNS Entries) state
   const [rewrites, setRewrites] = useState<DnsRewrite[]>([])
@@ -111,30 +216,251 @@ export default function DNS() {
   const [rewriteLoading, setRewriteLoading] = useState(false)
   const [rewriteError, setRewriteError] = useState<string | null>(null)
 
+  // Enhanced settings state
+  const [dnsServerConfig, setDnsServerConfig] = useState<DnsServerConfig | null>(null)
+  const [safeSearchConfig, setSafeSearchConfig] = useState<SafeSearchConfig | null>(null)
+  const [queryLogConfig, setQueryLogConfig] = useState<QueryLogConfig | null>(null)
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
+
+  // Service schedules state
+  const [schedules, setSchedules] = useState<DnsServiceSchedule[]>([])
+  const [schedulesLoading, setSchedulesLoading] = useState(false)
+  const [showScheduleModal, setShowScheduleModal] = useState(false)
+  const [editingSchedule, setEditingSchedule] = useState<DnsServiceSchedule | null>(null)
+  const [newSchedule, setNewSchedule] = useState({
+    name: '',
+    description: '',
+    services: [] as string[],
+    days_of_week: [0, 1, 2, 3, 4] as number[],  // Mon-Fri by default
+    start_time: '09:00',
+    end_time: '17:00',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    enabled: true,
+  })
+
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchStats, 30000)
-    return () => clearInterval(interval)
+    fetchBlockedServices() // Load services for global settings
   }, [])
 
-  // Refetch stats when time range changes
+  // Refetch stats when time range changes, and set up auto-refresh interval
   useEffect(() => {
     fetchStats()
+    const interval = setInterval(fetchStats, 30000)
+    return () => clearInterval(interval)
   }, [timeRange])
 
   const fetchData = async () => {
     setError(null)
     try {
-      const [statusRes, statsRes] = await Promise.all([
+      const [statusRes, statsRes, globalRes] = await Promise.all([
         api.getDnsStatus(),
         api.getDnsStats(timeRange),
+        api.getDnsGlobalSettings(),
       ])
       setStatus(statusRes)
       setStats(statsRes)
+      setGlobalSettings(globalRes)
+
+      // Fetch client lookup separately - don't fail the whole page if this fails
+      try {
+        const lookupRes = await api.getClientLookup()
+        setClientLookup(lookupRes.lookup)
+      } catch (lookupErr) {
+        console.error('Failed to fetch client lookup:', lookupErr)
+        // Continue without client enrichment
+      }
     } catch (err) {
       console.error('Failed to fetch DNS data:', err)
       setError('Failed to connect to DNS service. Make sure AdGuard Home is running.')
     }
+  }
+
+  const handleUpdateGlobalSettings = async (update: Partial<DnsGlobalSettings>) => {
+    setGlobalSettingsLoading(true)
+    try {
+      const result = await api.updateDnsGlobalSettings(update)
+      setGlobalSettings(result.settings)
+    } catch (err) {
+      console.error('Failed to update global settings:', err)
+    } finally {
+      setGlobalSettingsLoading(false)
+    }
+  }
+
+  const handleToggleGlobalService = async (serviceId: string) => {
+    if (!globalSettings) return
+    const currentServices = globalSettings.blocked_services || []
+    const newServices = currentServices.includes(serviceId)
+      ? currentServices.filter(s => s !== serviceId)
+      : [...currentServices, serviceId]
+    await handleUpdateGlobalSettings({ blocked_services: newServices })
+  }
+
+  // Bulk toggle all services in a category
+  const handleToggleCategory = async (categoryKey: string) => {
+    if (!globalSettings) return
+    const category = SERVICE_CATEGORIES[categoryKey]
+    if (!category) return
+
+    const currentServices = globalSettings.blocked_services || []
+    const categoryServices = category.services
+    const allBlocked = categoryServices.every(s => currentServices.includes(s))
+
+    let newServices: string[]
+    if (allBlocked) {
+      // Unblock all services in category
+      newServices = currentServices.filter(s => !categoryServices.includes(s))
+    } else {
+      // Block all services in category
+      newServices = [...new Set([...currentServices, ...categoryServices])]
+    }
+    await handleUpdateGlobalSettings({ blocked_services: newServices })
+  }
+
+  // Fetch enhanced settings
+  const fetchEnhancedSettings = async () => {
+    setSettingsLoading(true)
+    try {
+      const [serverConfig, safeSearch, queryLog] = await Promise.all([
+        api.getDnsServerConfig(),
+        api.getSafeSearchConfig(),
+        api.getQueryLogConfig(),
+      ])
+      setDnsServerConfig(serverConfig)
+      setSafeSearchConfig(safeSearch)
+      setQueryLogConfig(queryLog)
+    } catch (err) {
+      console.error('Failed to fetch enhanced settings:', err)
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  // Update DNS server config
+  const handleUpdateDnsServerConfig = async (update: Partial<DnsServerConfig>) => {
+    setSettingsLoading(true)
+    try {
+      const result = await api.updateDnsServerConfig(update)
+      setDnsServerConfig(result.config)
+    } catch (err) {
+      console.error('Failed to update DNS server config:', err)
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  // Update safe search config
+  const handleUpdateSafeSearchConfig = async (update: Partial<SafeSearchConfig>) => {
+    setSettingsLoading(true)
+    try {
+      const result = await api.updateSafeSearchConfig(update)
+      setSafeSearchConfig(result.config)
+    } catch (err) {
+      console.error('Failed to update safe search config:', err)
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  // Update query log config
+  const handleUpdateQueryLogConfig = async (update: Partial<QueryLogConfig>) => {
+    setSettingsLoading(true)
+    try {
+      const result = await api.updateQueryLogConfig(update)
+      setQueryLogConfig(result.config)
+    } catch (err) {
+      console.error('Failed to update query log config:', err)
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  // Fetch service schedules
+  const fetchSchedules = async () => {
+    setSchedulesLoading(true)
+    try {
+      const result = await api.getServiceSchedules()
+      setSchedules(result.schedules)
+    } catch (err) {
+      console.error('Failed to fetch schedules:', err)
+    } finally {
+      setSchedulesLoading(false)
+    }
+  }
+
+  // Create service schedule
+  const handleCreateSchedule = async () => {
+    if (!newSchedule.name || newSchedule.services.length === 0) return
+
+    setSchedulesLoading(true)
+    try {
+      const result = await api.createServiceSchedule(newSchedule)
+      setSchedules(prev => [...prev, result.schedule])
+      setShowScheduleModal(false)
+      resetScheduleForm()
+    } catch (err) {
+      console.error('Failed to create schedule:', err)
+    } finally {
+      setSchedulesLoading(false)
+    }
+  }
+
+  // Update service schedule
+  const handleUpdateSchedule = async (scheduleId: number, update: Partial<DnsServiceSchedule>) => {
+    setSchedulesLoading(true)
+    try {
+      const result = await api.updateServiceSchedule(scheduleId, update)
+      setSchedules(prev => prev.map(s => s.id === scheduleId ? result.schedule : s))
+      if (editingSchedule?.id === scheduleId) {
+        setEditingSchedule(result.schedule)
+      }
+    } catch (err) {
+      console.error('Failed to update schedule:', err)
+    } finally {
+      setSchedulesLoading(false)
+    }
+  }
+
+  // Delete service schedule
+  const handleDeleteSchedule = async (scheduleId: number) => {
+    if (!confirm('Are you sure you want to delete this schedule?')) return
+
+    setSchedulesLoading(true)
+    try {
+      await api.deleteServiceSchedule(scheduleId)
+      setSchedules(prev => prev.filter(s => s.id !== scheduleId))
+      if (editingSchedule?.id === scheduleId) {
+        setEditingSchedule(null)
+      }
+    } catch (err) {
+      console.error('Failed to delete schedule:', err)
+    } finally {
+      setSchedulesLoading(false)
+    }
+  }
+
+  // Reset schedule form
+  const resetScheduleForm = () => {
+    setNewSchedule({
+      name: '',
+      description: '',
+      services: [],
+      days_of_week: [0, 1, 2, 3, 4],
+      start_time: '09:00',
+      end_time: '17:00',
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      enabled: true,
+    })
+  }
+
+  // Day name helper
+  const getDayName = (day: number, short = false) => {
+    const days = short
+      ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+      : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    return days[day]
   }
 
   const fetchStats = async () => {
@@ -166,10 +492,66 @@ export default function DNS() {
 
   const fetchClients = async () => {
     try {
-      const data = await api.getDnsClients()
-      setClients(data.clients)
+      const [clientsData, lookupData] = await Promise.all([
+        api.getDnsClients(),
+        api.getClientLookup(),
+      ])
+      setClients(clientsData.clients)
+      setClientLookup(lookupData.lookup)
     } catch (err) {
       console.error('Failed to fetch clients:', err)
+    }
+  }
+
+  const fetchBlockedServices = async () => {
+    if (availableServices.length > 0) return // Already loaded
+    setServicesLoading(true)
+    try {
+      const data = await api.getBlockedServices()
+      // Ensure we have a valid array
+      if (data?.services && Array.isArray(data.services)) {
+        setAvailableServices(data.services)
+      } else {
+        console.warn('Invalid blocked services response:', data)
+        // Use fallback list
+        setAvailableServices([
+          { id: 'facebook', name: 'Facebook' },
+          { id: 'instagram', name: 'Instagram' },
+          { id: 'tiktok', name: 'TikTok' },
+          { id: 'youtube', name: 'YouTube' },
+          { id: 'twitter', name: 'Twitter' },
+          { id: 'netflix', name: 'Netflix' },
+          { id: 'discord', name: 'Discord' },
+          { id: 'snapchat', name: 'Snapchat' },
+          { id: 'twitch', name: 'Twitch' },
+          { id: 'reddit', name: 'Reddit' },
+          { id: 'spotify', name: 'Spotify' },
+          { id: 'telegram', name: 'Telegram' },
+          { id: 'whatsapp', name: 'WhatsApp' },
+          { id: 'steam', name: 'Steam' },
+        ])
+      }
+    } catch (err) {
+      console.error('Failed to fetch blocked services:', err)
+      // Use fallback list on error
+      setAvailableServices([
+        { id: 'facebook', name: 'Facebook' },
+        { id: 'instagram', name: 'Instagram' },
+        { id: 'tiktok', name: 'TikTok' },
+        { id: 'youtube', name: 'YouTube' },
+        { id: 'twitter', name: 'Twitter' },
+        { id: 'netflix', name: 'Netflix' },
+        { id: 'discord', name: 'Discord' },
+        { id: 'snapchat', name: 'Snapchat' },
+        { id: 'twitch', name: 'Twitch' },
+        { id: 'reddit', name: 'Reddit' },
+        { id: 'spotify', name: 'Spotify' },
+        { id: 'telegram', name: 'Telegram' },
+        { id: 'whatsapp', name: 'WhatsApp' },
+        { id: 'steam', name: 'Steam' },
+      ])
+    } finally {
+      setServicesLoading(false)
     }
   }
 
@@ -200,6 +582,7 @@ export default function DNS() {
       const data = await api.getDnsAlerts({
         status: statusParam,
         severity: severityParam,
+        hours: timeRange,
         limit: 50,
       })
       setAlerts(data.alerts)
@@ -207,7 +590,7 @@ export default function DNS() {
     } catch (err) {
       console.error('Failed to fetch alerts:', err)
     }
-  }, [alertFilter, severityFilter])
+  }, [alertFilter, severityFilter, timeRange])
 
   const connectAlertsWebSocket = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -262,6 +645,11 @@ export default function DNS() {
     }
   }
 
+  const handleInvestigateAlert = (alert: DnsSecurityAlert) => {
+    setInvestigateAlert(alert)
+    setShowInvestigationModal(true)
+  }
+
   const handleFalsePositive = async (alertId: string) => {
     try {
       await api.markDnsFalsePositive(alertId)
@@ -312,6 +700,11 @@ export default function DNS() {
     if (activeTab === 'rules') fetchRules()
     if (activeTab === 'rewrites') fetchRewrites()
     if (activeTab === 'clients') fetchClients()
+    if (activeTab === 'settings') {
+      fetchBlockedServices()
+      fetchEnhancedSettings()
+      fetchSchedules()
+    }
     if (activeTab === 'querylog') {
       fetchQueryLog()
       fetchClients() // Populate client filter dropdown
@@ -497,7 +890,7 @@ export default function DNS() {
 
     const content = [
       '# DNS Rules Export',
-      `# Generated: ${new Date().toISOString()}`,
+      `# Generated: ${formatDateTime(new Date())}`,
       '',
       '# Block Rules',
       ...blockRules,
@@ -510,7 +903,7 @@ export default function DNS() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `dns-rules-${new Date().toISOString().split('T')[0]}.txt`
+    a.download = `dns-rules-${formatISODate()}.txt`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -536,7 +929,7 @@ export default function DNS() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `dns-query-log-${new Date().toISOString().split('T')[0]}.csv`
+    a.download = `dns-query-log-${formatISODate()}.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -580,6 +973,7 @@ export default function DNS() {
   const openClientModal = (client: DnsClient) => {
     setSelectedClient(client)
     setEditClientName(client.name || '')
+    fetchBlockedServices() // Load services list when modal opens
   }
 
   const closeClientModal = () => {
@@ -592,6 +986,10 @@ export default function DNS() {
     filtering_enabled?: boolean
     safe_browsing?: boolean
     parental_control?: boolean
+    blocked_services?: string[]
+    tags?: string[]
+    use_global_settings?: boolean
+    upstream_dns?: string[]
   }) => {
     if (!selectedClient) return
 
@@ -608,6 +1006,28 @@ export default function DNS() {
     } finally {
       setClientUpdateLoading(false)
     }
+  }
+
+  const handleToggleService = async (serviceId: string) => {
+    if (!selectedClient) return
+    const currentServices = selectedClient.blocked_services || []
+    const newServices = currentServices.includes(serviceId)
+      ? currentServices.filter(s => s !== serviceId)
+      : [...currentServices, serviceId]
+    await handleUpdateClient({ blocked_services: newServices })
+  }
+
+  const handleToggleTag = async (tagId: string) => {
+    if (!selectedClient) return
+    const currentTags = selectedClient.tags || []
+    const newTags = currentTags.includes(tagId)
+      ? currentTags.filter(t => t !== tagId)
+      : [...currentTags, tagId]
+    await handleUpdateClient({ tags: newTags })
+  }
+
+  const handleResetToGlobal = async () => {
+    await handleUpdateClient({ use_global_settings: true })
   }
 
   const handleSaveClientName = async () => {
@@ -630,67 +1050,68 @@ export default function DNS() {
     { id: 'rules', label: 'Rules', icon: <Filter size={16} /> },
     { id: 'rewrites', label: 'DNS Entries', icon: <Link size={16} /> },
     { id: 'clients', label: 'Clients', icon: <Users size={16} /> },
+    { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },
     { id: 'chat', label: 'Chat', icon: <Globe size={16} /> },
   ]
 
   return (
     <div className="flex h-full">
       {/* Main Content */}
-      <div className="flex-1 p-6 overflow-y-auto">
+      <div className="flex-1 p-3 sm:p-6 overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 sm:mb-6">
           <div className="flex items-center gap-3">
-            <Shield className="text-magnetic-primary" size={28} />
-            <div>
-              <h1 className="text-2xl font-semibold text-white">DNS Security</h1>
-              <p className="text-sm text-gray-400">
+            <Shield className="text-magnetic-primary flex-shrink-0" size={24} />
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-semibold text-white">DNS Security</h1>
+              <p className="text-xs sm:text-sm text-gray-400 hidden sm:block">
                 Ad blocking, privacy protection, and threat prevention
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {status && (
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm ${
+              <div className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-full text-xs sm:text-sm ${
                 status.running ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
               }`}>
-                {status.running ? <ShieldCheck size={16} /> : <ShieldOff size={16} />}
+                {status.running ? <ShieldCheck size={14} /> : <ShieldOff size={14} />}
                 {status.running ? 'Protected' : 'Offline'}
               </div>
             )}
             <button
               onClick={fetchData}
-              className="magnetic-button-secondary flex items-center gap-2"
+              className="magnetic-button-secondary flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 text-sm touch-target"
             >
-              <RefreshCw size={16} />
-              Refresh
+              <RefreshCw size={14} />
+              <span className="hidden sm:inline">Refresh</span>
             </button>
           </div>
         </div>
 
         {/* Error State */}
         {error && (
-          <div className="magnetic-card p-4 mb-6 border-l-4 border-yellow-500 bg-yellow-500/10">
-            <div className="flex items-center gap-2 text-yellow-400">
-              <AlertTriangle size={20} />
+          <div className="magnetic-card p-3 sm:p-4 mb-4 sm:mb-6 border-l-4 border-yellow-500 bg-yellow-500/10">
+            <div className="flex items-center gap-2 text-yellow-400 text-sm">
+              <AlertTriangle size={18} />
               <span>{error}</span>
             </div>
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex gap-1 mb-6 border-b border-gray-700">
+        {/* Tabs - horizontally scrollable on mobile */}
+        <div className="flex gap-1 mb-4 sm:mb-6 border-b border-gray-700 overflow-x-auto pb-px -mx-3 px-3 sm:mx-0 sm:px-0">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm transition-colors ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 text-xs sm:text-sm transition-colors whitespace-nowrap touch-target ${
                 activeTab === tab.id
                   ? 'text-magnetic-primary border-b-2 border-magnetic-primary'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               {tab.icon}
-              {tab.label}
+              <span className="hidden sm:inline">{tab.label}</span>
             </button>
           ))}
         </div>
@@ -740,59 +1161,59 @@ export default function DNS() {
 
             {/* Stats Grid */}
             {stats && (
-              <div className="grid grid-cols-5 gap-4">
-                <div className="magnetic-card p-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+                <div className="magnetic-card p-3 sm:p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Total Queries</span>
-                    <Activity className="text-magnetic-primary" size={20} />
+                    <span className="text-gray-400 text-xs sm:text-sm truncate mr-2">Total Queries</span>
+                    <Activity className="text-magnetic-primary flex-shrink-0" size={18} />
                   </div>
-                  <div className="text-2xl font-semibold text-white mt-2">
+                  <div className="text-xl sm:text-2xl font-semibold text-white mt-1 sm:mt-2">
                     {formatNumber(stats.total_queries)}
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {timeRange === 24 ? 'Last 24 hours' : timeRange === 168 ? 'Last 7 days' : 'Last 30 days'}
+                  <div className="text-xs text-gray-500 mt-1 truncate">
+                    {timeRange === 24 ? 'Last 24h' : timeRange === 168 ? 'Last 7d' : 'Last 30d'}
                   </div>
                 </div>
-                <div className="magnetic-card p-4">
+                <div className="magnetic-card p-3 sm:p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Blocked</span>
-                    <Ban className="text-red-400" size={20} />
+                    <span className="text-gray-400 text-xs sm:text-sm">Blocked</span>
+                    <Ban className="text-red-400 flex-shrink-0" size={18} />
                   </div>
-                  <div className="text-2xl font-semibold text-red-400 mt-2">
+                  <div className="text-xl sm:text-2xl font-semibold text-red-400 mt-1 sm:mt-2">
                     {formatNumber(stats.blocked_queries)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">
-                    {(stats.blocked_percentage ?? 0).toFixed(1)}% of total
+                    {(stats.blocked_percentage ?? 0).toFixed(1)}%
                   </div>
                 </div>
-                <div className="magnetic-card p-4">
+                <div className="magnetic-card p-3 sm:p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Cached</span>
-                    <TrendingUp className="text-green-400" size={20} />
+                    <span className="text-gray-400 text-xs sm:text-sm">Cached</span>
+                    <TrendingUp className="text-green-400 flex-shrink-0" size={18} />
                   </div>
-                  <div className="text-2xl font-semibold text-green-400 mt-2">
+                  <div className="text-xl sm:text-2xl font-semibold text-green-400 mt-1 sm:mt-2">
                     {formatNumber(stats.cached_queries)}
                   </div>
                   <div className="text-xs text-gray-500 mt-1">Cache hits</div>
                 </div>
-                <div className="magnetic-card p-4">
+                <div className="magnetic-card p-3 sm:p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Cache Rate</span>
-                    <TrendingUp className="text-purple-400" size={20} />
+                    <span className="text-gray-400 text-xs sm:text-sm">Cache Rate</span>
+                    <TrendingUp className="text-purple-400 flex-shrink-0" size={18} />
                   </div>
-                  <div className="text-2xl font-semibold text-purple-400 mt-2">
+                  <div className="text-xl sm:text-2xl font-semibold text-purple-400 mt-1 sm:mt-2">
                     {stats.total_queries > 0
                       ? ((stats.cached_queries / stats.total_queries) * 100).toFixed(1)
                       : 0}%
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">Cache efficiency</div>
+                  <div className="text-xs text-gray-500 mt-1">Efficiency</div>
                 </div>
-                <div className="magnetic-card p-4">
+                <div className="magnetic-card p-3 sm:p-4 col-span-2 sm:col-span-1">
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-400 text-sm">Avg Response</span>
-                    <Clock className="text-yellow-400" size={20} />
+                    <span className="text-gray-400 text-xs sm:text-sm">Avg Response</span>
+                    <Clock className="text-yellow-400 flex-shrink-0" size={18} />
                   </div>
-                  <div className="text-2xl font-semibold text-yellow-400 mt-2">
+                  <div className="text-xl sm:text-2xl font-semibold text-yellow-400 mt-1 sm:mt-2">
                     {(stats.avg_response_time ?? 0).toFixed(0)}ms
                   </div>
                   <div className="text-xs text-gray-500 mt-1">Response time</div>
@@ -810,15 +1231,27 @@ export default function DNS() {
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart
-                      data={stats.queries_over_time.map((q, i) => ({
-                        time: i,
-                        queries: typeof q === 'object' ? (q as { count: number }).count : q,
-                        blocked: stats.blocked_over_time?.[i]
-                          ? (typeof stats.blocked_over_time[i] === 'object'
-                            ? (stats.blocked_over_time[i] as { count: number }).count
-                            : stats.blocked_over_time[i])
-                          : 0,
-                      }))}
+                      data={(() => {
+                        const now = new Date()
+                        const dataLen = stats.queries_over_time.length
+                        return stats.queries_over_time.map((q, i) => {
+                          // Calculate the actual timestamp for this data point
+                          // Index 0 is oldest (dataLen-1 hours ago), last index is most recent
+                          const hoursAgo = dataLen - 1 - i
+                          const pointTime = new Date(now.getTime() - hoursAgo * 60 * 60 * 1000)
+                          return {
+                            time: i,
+                            hour: pointTime.getHours(),
+                            timestamp: pointTime,
+                            queries: typeof q === 'object' ? (q as { count: number }).count : q,
+                            blocked: stats.blocked_over_time?.[i]
+                              ? (typeof stats.blocked_over_time[i] === 'object'
+                                ? (stats.blocked_over_time[i] as { count: number }).count
+                                : stats.blocked_over_time[i])
+                              : 0,
+                          }
+                        })
+                      })()}
                       margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
                     >
                       <defs>
@@ -836,10 +1269,26 @@ export default function DNS() {
                         stroke="#6b7280"
                         tick={{ fill: '#9ca3af', fontSize: 12 }}
                         tickFormatter={(val) => {
-                          if (timeRange === 24) return `${val}h`;
-                          if (timeRange === 168) return `${Math.floor(val / 24)}d`;
-                          return `${Math.floor(val / 24)}d`;
+                          const now = new Date()
+                          const dataLen = stats.queries_over_time.length
+                          const hoursAgo = dataLen - 1 - val
+                          const pointTime = new Date(now.getTime() - hoursAgo * 60 * 60 * 1000)
+
+                          if (timeRange === 24) {
+                            // Show absolute time like "2 PM", "3 AM"
+                            const hour = pointTime.getHours()
+                            const ampm = hour >= 12 ? 'PM' : 'AM'
+                            const hour12 = hour % 12 || 12
+                            return `${hour12}${ampm}`
+                          }
+                          if (timeRange === 168) {
+                            // For 7 days, show day abbreviation
+                            return pointTime.toLocaleDateString('en-US', { weekday: 'short' })
+                          }
+                          // For 30 days, show absolute date like "Jan 15"
+                          return pointTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                         }}
+                        interval={timeRange === 24 ? 3 : timeRange === 168 ? 23 : 119}
                       />
                       <YAxis stroke="#6b7280" tick={{ fill: '#9ca3af', fontSize: 12 }} />
                       <Tooltip
@@ -850,8 +1299,23 @@ export default function DNS() {
                           color: '#fff',
                         }}
                         labelFormatter={(val) => {
-                          if (timeRange === 24) return `Hour ${val}`;
-                          return `Day ${Math.floor(val / 24) + 1}`;
+                          const now = new Date()
+                          const dataLen = stats.queries_over_time.length
+                          const hoursAgo = dataLen - 1 - (val as number)
+                          const pointTime = new Date(now.getTime() - hoursAgo * 60 * 60 * 1000)
+                          if (timeRange === 24) {
+                            return pointTime.toLocaleString('en-US', {
+                              weekday: 'short',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })
+                          }
+                          return pointTime.toLocaleString('en-US', {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                          })
                         }}
                       />
                       <Area
@@ -886,7 +1350,13 @@ export default function DNS() {
                 <div className="space-y-2">
                   {stats?.top_domains.slice(0, 5).map((d, i) => (
                     <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-gray-300 truncate flex-1">{d.domain}</span>
+                      <span
+                        className="text-gray-300 truncate flex-1"
+                        style={{ direction: 'rtl', textAlign: 'left' }}
+                        title={d.domain}
+                      >
+                        {d.domain}
+                      </span>
                       <span className="text-gray-500 ml-2">{formatNumber(d.count)}</span>
                     </div>
                   ))}
@@ -903,7 +1373,13 @@ export default function DNS() {
                 <div className="space-y-2">
                   {stats?.top_blocked.slice(0, 5).map((d, i) => (
                     <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-red-300 truncate flex-1">{d.domain}</span>
+                      <span
+                        className="text-red-300 truncate flex-1"
+                        style={{ direction: 'rtl', textAlign: 'left' }}
+                        title={d.domain}
+                      >
+                        {d.domain}
+                      </span>
                       <span className="text-gray-500 ml-2">{formatNumber(d.count)}</span>
                     </div>
                   ))}
@@ -1069,7 +1545,7 @@ export default function DNS() {
                     <div>
                       <span className="text-gray-400">First Seen:</span>
                       <span className="text-white ml-2">
-                        {domainReputation.first_seen ? new Date(domainReputation.first_seen).toLocaleDateString() : 'Unknown'}
+                        {domainReputation.first_seen ? formatDate(domainReputation.first_seen) : 'Unknown'}
                       </span>
                     </div>
                   </div>
@@ -1142,13 +1618,13 @@ export default function DNS() {
                           {alert.severity}
                         </span>
                         <span className="text-gray-500 text-xs">
-                          {alert.timestamp ? new Date(alert.timestamp).toLocaleString() : ''}
+                          {alert.timestamp ? formatDateTime(alert.timestamp) : ''}
                         </span>
                       </div>
                     </div>
                     <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-700/50">
                       <div className="flex items-center gap-4 text-sm text-gray-400">
-                        <span>Client: {alert.client_ip}</span>
+                        <span className="flex items-center gap-1">Client: <ClientDisplay ip={alert.client_ip || 'unknown'} lookup={clientLookup} compact /></span>
                         <span className={`px-2 py-0.5 rounded text-xs ${
                           alert.status === 'open' ? 'bg-yellow-500/20 text-yellow-400' :
                           alert.status === 'acknowledged' ? 'bg-blue-500/20 text-blue-400' :
@@ -1158,20 +1634,18 @@ export default function DNS() {
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        {alert.status === 'open' && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleAcknowledgeAlert(alert.alert_id); }}
-                            className="p-1 text-gray-400 hover:text-blue-400 transition-colors"
-                            title="Acknowledge"
-                          >
-                            <Eye size={16} />
-                          </button>
-                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleInvestigateAlert(alert); }}
+                          className="p-1 text-gray-400 hover:text-cyan-400 transition-colors"
+                          title="Investigate"
+                        >
+                          <Eye size={16} />
+                        </button>
                         {alert.status !== 'resolved' && (
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleResolveAlert(alert.alert_id); }}
+                            onClick={(e) => { e.stopPropagation(); handleAcknowledgeAlert(alert.alert_id); }}
                             className="p-1 text-gray-400 hover:text-green-400 transition-colors"
-                            title="Resolve"
+                            title="Acknowledge"
                           >
                             <CheckCircle size={16} />
                           </button>
@@ -1231,8 +1705,10 @@ export default function DNS() {
                         <p className="text-white font-mono text-sm">{selectedAlert.domain}</p>
                       </div>
                       <div>
-                        <span className="text-gray-400 text-sm">Client IP</span>
-                        <p className="text-white font-mono text-sm">{selectedAlert.client_ip}</p>
+                        <span className="text-gray-400 text-sm">Client</span>
+                        <div className="mt-1">
+                          <ClientDisplay ip={selectedAlert.client_ip || 'unknown'} lookup={clientLookup} showDetails />
+                        </div>
                       </div>
                       {selectedAlert.llm_analysis && (
                         <div>
@@ -1368,15 +1844,18 @@ export default function DNS() {
                     <th className="text-left p-3 text-gray-400 font-medium">Status</th>
                     <th className="text-left p-3 text-gray-400 font-medium">Block Reason</th>
                     <th className="text-left p-3 text-gray-400 font-medium">Response</th>
+                    <th className="text-center p-3 text-gray-400 font-medium w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
                   {queryLog.map((entry, i) => (
                     <tr key={i} className="hover:bg-gray-800/30">
                       <td className="p-3 text-gray-400 text-xs">
-                        {new Date(entry.timestamp).toLocaleTimeString()}
+                        {formatShortDateTime(entry.timestamp)}
                       </td>
-                      <td className="p-3 text-gray-300">{entry.client_ip}</td>
+                      <td className="p-3">
+                        <ClientDisplay ip={entry.client_ip} lookup={clientLookup} compact />
+                      </td>
                       <td className="p-3 text-white truncate max-w-xs">{entry.domain}</td>
                       <td className="p-3">
                         <span className={`px-2 py-0.5 rounded text-xs ${
@@ -1394,11 +1873,20 @@ export default function DNS() {
                         {(entry.response_time_ms ?? 0).toFixed(0)}ms
                         {entry.cached && <span className="ml-2 text-yellow-400">(cached)</span>}
                       </td>
+                      <td className="p-3 text-center">
+                        <button
+                          onClick={() => setAnalyzeDomain(entry.domain)}
+                          className="p-1.5 text-surface-400 hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                          title="AI Domain Analysis"
+                        >
+                          <Search className="w-4 h-4" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                   {queryLog.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="p-6 text-center text-gray-500">
+                      <td colSpan={7} className="p-6 text-center text-gray-500">
                         No query logs found
                       </td>
                     </tr>
@@ -1506,7 +1994,7 @@ export default function DNS() {
                         <div className="text-sm text-gray-400 mt-1 flex items-center gap-3">
                           <span>{formatNumber(bl.rules_count)} rules</span>
                           {bl.last_updated && (
-                            <span>Updated {new Date(bl.last_updated).toLocaleDateString()}</span>
+                            <span>Updated {formatDate(bl.last_updated)}</span>
                           )}
                         </div>
                       </div>
@@ -1840,7 +2328,7 @@ export default function DNS() {
                   <div className="flex items-center gap-2">
                     {rewrite.created_at && (
                       <span className="text-gray-500 text-xs">
-                        {new Date(rewrite.created_at).toLocaleDateString()}
+                        {formatDate(rewrite.created_at)}
                       </span>
                     )}
                     <button
@@ -1899,13 +2387,45 @@ export default function DNS() {
                           Parental
                         </span>
                       )}
+                      {(client.blocked_services?.length ?? 0) > 0 && (
+                        <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded">
+                          {client.blocked_services?.length} Blocked
+                        </span>
+                      )}
+                      {!client.use_global_settings && (
+                        <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-400 text-xs rounded">
+                          Custom
+                        </span>
+                      )}
+                      {/* Display tags */}
+                      {(client.tags?.length ?? 0) > 0 && (
+                        <span className="text-gray-400 text-xs">
+                          {client.tags?.map(tagId => {
+                            const allTags = [...AVAILABLE_TAGS.device, ...AVAILABLE_TAGS.os, ...AVAILABLE_TAGS.user]
+                            const tag = allTags.find(t => t.id === tagId)
+                            return tag ? tag.icon : null
+                          }).filter(Boolean).join(' ')}
+                        </span>
+                      )}
                     </div>
-                    <div className="text-sm text-gray-400 mt-1 flex items-center gap-3">
+                    <div className="text-sm text-gray-400 mt-1 flex flex-wrap items-center gap-3">
                       <span>{client.ip_addresses?.[0] || client.client_id}</span>
+                      {/* Show device info from client lookup */}
+                      {(() => {
+                        const info = clientLookup[client.client_id]
+                        if (info && (info.os || info.manufacturer || info.device_type)) {
+                          return (
+                            <span className="text-gray-500">
+                              {[info.device_type, info.os, info.manufacturer].filter(Boolean).join(' / ')}
+                            </span>
+                          )
+                        }
+                        return null
+                      })()}
                       <span>{(client.queries_count ?? 0).toLocaleString()} queries</span>
                       <span className="text-red-400">{(client.blocked_count ?? 0).toLocaleString()} blocked</span>
                       {client.last_seen && (
-                        <span>Last: {new Date(client.last_seen).toLocaleDateString()}</span>
+                        <span>Last: {formatDate(client.last_seen)}</span>
                       )}
                     </div>
                   </div>
@@ -2032,6 +2552,127 @@ export default function DNS() {
                       </div>
                     </div>
 
+                    {/* Blocked Services */}
+                    <div className="border-t border-gray-700 pt-4 mt-4">
+                      <h4 className="text-white font-medium text-sm mb-2">Block Services</h4>
+                      <p className="text-gray-500 text-xs mb-3">
+                        Block access to specific services for this device
+                      </p>
+                      {servicesLoading ? (
+                        <div className="text-gray-400 text-sm">Loading services...</div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+                          {availableServices.map(service => (
+                            <label
+                              key={service.id}
+                              className="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-800/50 p-1 rounded"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedClient.blocked_services?.includes(service.id) ?? false}
+                                onChange={() => handleToggleService(service.id)}
+                                disabled={clientUpdateLoading}
+                                className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-magnetic-primary focus:ring-magnetic-primary"
+                              />
+                              <span className="text-gray-300">{service.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Client Tags */}
+                    <div className="border-t border-gray-700 pt-4 mt-4">
+                      <h4 className="text-white font-medium text-sm mb-2">Device Tags</h4>
+                      <p className="text-gray-500 text-xs mb-3">
+                        Classify this device for organization
+                      </p>
+                      <div className="space-y-3">
+                        {/* Device Type */}
+                        <div>
+                          <span className="text-gray-400 text-xs font-medium block mb-2">Device Type</span>
+                          <div className="flex flex-wrap gap-1">
+                            {AVAILABLE_TAGS.device.map(tag => (
+                              <button
+                                key={tag.id}
+                                onClick={() => handleToggleTag(tag.id)}
+                                disabled={clientUpdateLoading}
+                                className={`px-2 py-1 rounded text-xs transition-colors ${
+                                  selectedClient.tags?.includes(tag.id)
+                                    ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/50'
+                                    : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:border-gray-500'
+                                }`}
+                              >
+                                <span className="mr-1">{tag.icon}</span>
+                                {tag.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* OS Type */}
+                        <div>
+                          <span className="text-gray-400 text-xs font-medium block mb-2">Operating System</span>
+                          <div className="flex flex-wrap gap-1">
+                            {AVAILABLE_TAGS.os.map(tag => (
+                              <button
+                                key={tag.id}
+                                onClick={() => handleToggleTag(tag.id)}
+                                disabled={clientUpdateLoading}
+                                className={`px-2 py-1 rounded text-xs transition-colors ${
+                                  selectedClient.tags?.includes(tag.id)
+                                    ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                                    : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:border-gray-500'
+                                }`}
+                              >
+                                <span className="mr-1">{tag.icon}</span>
+                                {tag.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* User Type */}
+                        <div>
+                          <span className="text-gray-400 text-xs font-medium block mb-2">User Type</span>
+                          <div className="flex flex-wrap gap-1">
+                            {AVAILABLE_TAGS.user.map(tag => (
+                              <button
+                                key={tag.id}
+                                onClick={() => handleToggleTag(tag.id)}
+                                disabled={clientUpdateLoading}
+                                className={`px-2 py-1 rounded text-xs transition-colors ${
+                                  selectedClient.tags?.includes(tag.id)
+                                    ? 'bg-green-500/30 text-green-300 border border-green-500/50'
+                                    : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:border-gray-500'
+                                }`}
+                              >
+                                <span className="mr-1">{tag.icon}</span>
+                                {tag.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Reset to Global Settings */}
+                    {!selectedClient.use_global_settings && (
+                      <div className="border-t border-gray-700 pt-4 mt-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-white text-sm">Custom Settings Active</span>
+                            <p className="text-gray-500 text-xs">This client has per-device overrides</p>
+                          </div>
+                          <button
+                            onClick={handleResetToGlobal}
+                            disabled={clientUpdateLoading}
+                            className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
+                          >
+                            Reset to Global
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Stats */}
                     <div className="border-t border-gray-700 pt-4 mt-4">
                       <h4 className="text-white font-medium text-sm mb-3">Statistics</h4>
@@ -2056,7 +2697,7 @@ export default function DNS() {
                           <span className="text-gray-400">Last Seen</span>
                           <div className="text-white">
                             {selectedClient.last_seen
-                              ? new Date(selectedClient.last_seen).toLocaleString()
+                              ? formatDateTime(selectedClient.last_seen)
                               : 'Never'}
                           </div>
                         </div>
@@ -2075,6 +2716,783 @@ export default function DNS() {
           </div>
         )}
 
+        {/* Settings Tab */}
+        {activeTab === 'settings' && (
+          <div className="space-y-6">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Global DNS Settings</h2>
+                <p className="text-gray-400 text-sm mt-1">
+                  These settings apply to all clients unless overridden per-client
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                {(globalSettingsLoading || settingsLoading) && (
+                  <RefreshCw size={16} className="text-magnetic-primary animate-spin" />
+                )}
+                <button
+                  onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                  className="text-sm text-gray-400 hover:text-white flex items-center gap-1"
+                >
+                  <Settings size={14} />
+                  {showAdvancedSettings ? 'Hide Advanced' : 'Show Advanced'}
+                </button>
+              </div>
+            </div>
+
+            {globalSettings ? (
+              <>
+                {/* Row 1: Protection Settings + Safe Search Per-Engine */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Protection Settings Card */}
+                  <div className="magnetic-card p-6">
+                    <h3 className="text-white font-medium mb-6 flex items-center gap-2">
+                      <Shield size={18} className="text-magnetic-primary" />
+                      Protection Settings
+                    </h3>
+                    <div className="space-y-6">
+                      {/* Safe Browsing */}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-white font-medium">Safe Browsing</span>
+                          <p className="text-gray-400 text-sm mt-1">
+                            Block malware, phishing, and malicious websites
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleUpdateGlobalSettings({ safebrowsing_enabled: !globalSettings.safebrowsing_enabled })}
+                          disabled={globalSettingsLoading}
+                          className={`w-14 h-7 rounded-full transition-colors relative flex-shrink-0 ${
+                            globalSettings.safebrowsing_enabled ? 'bg-green-500' : 'bg-gray-600'
+                          } ${globalSettingsLoading ? 'opacity-50' : ''}`}
+                        >
+                          <div className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all ${
+                            globalSettings.safebrowsing_enabled ? 'left-8' : 'left-1'
+                          }`} />
+                        </button>
+                      </div>
+
+                      {/* Parental Control */}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-white font-medium">Parental Control</span>
+                          <p className="text-gray-400 text-sm mt-1">
+                            Block adult websites and inappropriate content
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleUpdateGlobalSettings({ parental_enabled: !globalSettings.parental_enabled })}
+                          disabled={globalSettingsLoading}
+                          className={`w-14 h-7 rounded-full transition-colors relative flex-shrink-0 ${
+                            globalSettings.parental_enabled ? 'bg-green-500' : 'bg-gray-600'
+                          } ${globalSettingsLoading ? 'opacity-50' : ''}`}
+                        >
+                          <div className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all ${
+                            globalSettings.parental_enabled ? 'left-8' : 'left-1'
+                          }`} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Safe Search Per-Engine Card */}
+                  <div className="magnetic-card p-6">
+                    <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                      <Search size={18} className="text-magnetic-primary" />
+                      Safe Search
+                      {safeSearchConfig && (
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          safeSearchConfig.enabled ? 'bg-green-500/20 text-green-400' : 'bg-gray-600/50 text-gray-400'
+                        }`}>
+                          {safeSearchConfig.enabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-gray-400 text-sm mb-4">
+                      Force safe search mode on specific search engines
+                    </p>
+                    {safeSearchConfig ? (
+                      <div className="space-y-4">
+                        {/* Master Toggle */}
+                        <div className="flex items-center justify-between pb-3 border-b border-gray-700">
+                          <span className="text-white font-medium">Enable Safe Search</span>
+                          <button
+                            onClick={() => handleUpdateSafeSearchConfig({ enabled: !safeSearchConfig.enabled })}
+                            disabled={settingsLoading}
+                            className={`w-14 h-7 rounded-full transition-colors relative flex-shrink-0 ${
+                              safeSearchConfig.enabled ? 'bg-green-500' : 'bg-gray-600'
+                            } ${settingsLoading ? 'opacity-50' : ''}`}
+                          >
+                            <div className={`w-5 h-5 bg-white rounded-full absolute top-1 transition-all ${
+                              safeSearchConfig.enabled ? 'left-8' : 'left-1'
+                            }`} />
+                          </button>
+                        </div>
+
+                        {/* Per-Engine Toggles */}
+                        <div className={`grid grid-cols-2 gap-3 ${!safeSearchConfig.enabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                          {(['google', 'youtube', 'bing', 'duckduckgo', 'yandex', 'pixabay'] as const).map(engine => (
+                            <label
+                              key={engine}
+                              className="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-800/50 p-2 rounded transition-colors"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={safeSearchConfig[engine]}
+                                onChange={() => handleUpdateSafeSearchConfig({ [engine]: !safeSearchConfig[engine] })}
+                                disabled={settingsLoading || !safeSearchConfig.enabled}
+                                className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-magnetic-primary focus:ring-magnetic-primary"
+                              />
+                              <span className="text-gray-300 capitalize">{engine}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-gray-400">
+                        <RefreshCw size={14} className="animate-spin" />
+                        <span className="text-sm">Loading...</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Row 2: Blocked Services with Categories */}
+                <div className="magnetic-card p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-white font-medium flex items-center gap-2">
+                      <Ban size={18} className="text-red-400" />
+                      Blocked Services
+                    </h3>
+                    <span className="text-gray-400 text-sm">
+                      {globalSettings.blocked_services?.length || 0} blocked
+                    </span>
+                  </div>
+
+                  {/* Category Quick Toggles */}
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {Object.entries(SERVICE_CATEGORIES).map(([key, category]) => {
+                      const blockedCount = category.services.filter(s =>
+                        globalSettings.blocked_services?.includes(s)
+                      ).length
+                      const allBlocked = blockedCount === category.services.length
+                      const someBlocked = blockedCount > 0 && !allBlocked
+
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => handleToggleCategory(key)}
+                          disabled={globalSettingsLoading}
+                          className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors ${
+                            allBlocked
+                              ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                              : someBlocked
+                                ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                                : 'bg-gray-700/50 text-gray-400 border border-gray-600 hover:bg-gray-700'
+                          }`}
+                        >
+                          <span>{category.label}</span>
+                          <span className="text-xs opacity-75">
+                            {blockedCount}/{category.services.length}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* All Services Grid */}
+                  {servicesLoading ? (
+                    <div className="flex items-center gap-2 text-gray-400">
+                      <RefreshCw size={14} className="animate-spin" />
+                      <span className="text-sm">Loading services...</span>
+                    </div>
+                  ) : availableServices.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 max-h-48 overflow-y-auto">
+                      {availableServices.map(service => (
+                        <label
+                          key={service.id}
+                          className="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-800/50 p-2 rounded transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={globalSettings.blocked_services?.includes(service.id) ?? false}
+                            onChange={() => handleToggleGlobalService(service.id)}
+                            disabled={globalSettingsLoading}
+                            className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-magnetic-primary focus:ring-magnetic-primary"
+                          />
+                          <span className="text-gray-300 truncate">{service.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={fetchBlockedServices}
+                      className="text-sm text-cyan-400 hover:text-cyan-300 flex items-center gap-2"
+                    >
+                      <RefreshCw size={14} />
+                      Load available services...
+                    </button>
+                  )}
+                </div>
+
+                {/* Row 3: Advanced Settings (Collapsible) */}
+                {showAdvancedSettings && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* DNS Server Configuration */}
+                    <div className="magnetic-card p-6">
+                      <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                        <Zap size={18} className="text-yellow-400" />
+                        DNS Configuration
+                      </h3>
+                      {dnsServerConfig ? (
+                        <div className="space-y-4">
+                          {/* DNSSEC */}
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-white font-medium">DNSSEC</span>
+                              <p className="text-gray-400 text-xs mt-0.5">Validate DNS responses cryptographically</p>
+                            </div>
+                            <button
+                              onClick={() => handleUpdateDnsServerConfig({ dnssec_enabled: !dnsServerConfig.dnssec_enabled })}
+                              disabled={settingsLoading}
+                              className={`w-12 h-6 rounded-full transition-colors relative flex-shrink-0 ${
+                                dnsServerConfig.dnssec_enabled ? 'bg-green-500' : 'bg-gray-600'
+                              } ${settingsLoading ? 'opacity-50' : ''}`}
+                            >
+                              <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${
+                                dnsServerConfig.dnssec_enabled ? 'left-7' : 'left-1'
+                              }`} />
+                            </button>
+                          </div>
+
+                          {/* Blocking Mode */}
+                          <div>
+                            <span className="text-white font-medium text-sm">Blocking Mode</span>
+                            <select
+                              value={dnsServerConfig.blocking_mode}
+                              onChange={(e) => handleUpdateDnsServerConfig({ blocking_mode: e.target.value as DnsServerConfig['blocking_mode'] })}
+                              disabled={settingsLoading}
+                              className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-magnetic-primary focus:outline-none"
+                            >
+                              {BLOCKING_MODES.map(mode => (
+                                <option key={mode.value} value={mode.value}>
+                                  {mode.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Cache Settings */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-gray-400 text-xs">Cache Size (bytes)</label>
+                              <input
+                                type="number"
+                                value={dnsServerConfig.cache_size}
+                                onChange={(e) => handleUpdateDnsServerConfig({ cache_size: parseInt(e.target.value) || 0 })}
+                                disabled={settingsLoading}
+                                className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:border-magnetic-primary focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-gray-400 text-xs">Rate Limit (qps)</label>
+                              <input
+                                type="number"
+                                value={dnsServerConfig.ratelimit}
+                                onChange={(e) => handleUpdateDnsServerConfig({ ratelimit: parseInt(e.target.value) || 0 })}
+                                disabled={settingsLoading}
+                                className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:border-magnetic-primary focus:outline-none"
+                                placeholder="0 = unlimited"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Disable IPv6 */}
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-white font-medium text-sm">Disable IPv6</span>
+                              <p className="text-gray-400 text-xs">Drop all IPv6 (AAAA) queries</p>
+                            </div>
+                            <button
+                              onClick={() => handleUpdateDnsServerConfig({ disable_ipv6: !dnsServerConfig.disable_ipv6 })}
+                              disabled={settingsLoading}
+                              className={`w-12 h-6 rounded-full transition-colors relative flex-shrink-0 ${
+                                dnsServerConfig.disable_ipv6 ? 'bg-orange-500' : 'bg-gray-600'
+                              } ${settingsLoading ? 'opacity-50' : ''}`}
+                            >
+                              <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${
+                                dnsServerConfig.disable_ipv6 ? 'left-7' : 'left-1'
+                              }`} />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-gray-400">
+                          <RefreshCw size={14} className="animate-spin" />
+                          <span className="text-sm">Loading...</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Query Log Configuration */}
+                    <div className="magnetic-card p-6">
+                      <h3 className="text-white font-medium mb-4 flex items-center gap-2">
+                        <List size={18} className="text-blue-400" />
+                        Query Log
+                      </h3>
+                      {queryLogConfig ? (
+                        <div className="space-y-4">
+                          {/* Enable Query Log */}
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-white font-medium">Enable Query Log</span>
+                              <p className="text-gray-400 text-xs mt-0.5">Store DNS query history</p>
+                            </div>
+                            <button
+                              onClick={() => handleUpdateQueryLogConfig({ enabled: !queryLogConfig.enabled })}
+                              disabled={settingsLoading}
+                              className={`w-12 h-6 rounded-full transition-colors relative flex-shrink-0 ${
+                                queryLogConfig.enabled ? 'bg-green-500' : 'bg-gray-600'
+                              } ${settingsLoading ? 'opacity-50' : ''}`}
+                            >
+                              <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${
+                                queryLogConfig.enabled ? 'left-7' : 'left-1'
+                              }`} />
+                            </button>
+                          </div>
+
+                          {/* Retention Period */}
+                          <div className={queryLogConfig.enabled ? '' : 'opacity-50 pointer-events-none'}>
+                            <span className="text-white font-medium text-sm">Retention Period</span>
+                            <select
+                              value={queryLogConfig.interval}
+                              onChange={(e) => handleUpdateQueryLogConfig({ interval: parseInt(e.target.value) })}
+                              disabled={settingsLoading || !queryLogConfig.enabled}
+                              className="w-full mt-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:border-magnetic-primary focus:outline-none"
+                            >
+                              {QUERY_LOG_INTERVALS.map(interval => (
+                                <option key={interval.value} value={interval.value}>
+                                  {interval.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Anonymize Client IP */}
+                          <div className={`flex items-center justify-between ${queryLogConfig.enabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                            <div>
+                              <span className="text-white font-medium text-sm">Anonymize Client IP</span>
+                              <p className="text-gray-400 text-xs">Mask client IPs in logs</p>
+                            </div>
+                            <button
+                              onClick={() => handleUpdateQueryLogConfig({ anonymize_client_ip: !queryLogConfig.anonymize_client_ip })}
+                              disabled={settingsLoading || !queryLogConfig.enabled}
+                              className={`w-12 h-6 rounded-full transition-colors relative flex-shrink-0 ${
+                                queryLogConfig.anonymize_client_ip ? 'bg-green-500' : 'bg-gray-600'
+                              } ${settingsLoading ? 'opacity-50' : ''}`}
+                            >
+                              <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${
+                                queryLogConfig.anonymize_client_ip ? 'left-7' : 'left-1'
+                              }`} />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-gray-400">
+                          <RefreshCw size={14} className="animate-spin" />
+                          <span className="text-sm">Loading...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Service Schedules */}
+                <div className="magnetic-card p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-white font-medium flex items-center gap-2">
+                      <Calendar size={18} className="text-purple-400" />
+                      Service Schedules
+                    </h3>
+                    <button
+                      onClick={() => {
+                        resetScheduleForm()
+                        setEditingSchedule(null)
+                        setShowScheduleModal(true)
+                      }}
+                      className="magnetic-button-primary text-sm px-3 py-1.5 flex items-center gap-1.5"
+                    >
+                      <Plus size={14} />
+                      Add Schedule
+                    </button>
+                  </div>
+                  <p className="text-gray-400 text-sm mb-4">
+                    Create time-based rules to automatically block services during specific hours.
+                  </p>
+
+                  {schedulesLoading ? (
+                    <div className="flex items-center gap-2 text-gray-400">
+                      <RefreshCw size={14} className="animate-spin" />
+                      <span className="text-sm">Loading schedules...</span>
+                    </div>
+                  ) : schedules.length === 0 ? (
+                    <div className="text-center py-8 border border-dashed border-gray-600 rounded-lg">
+                      <Calendar size={32} className="text-gray-500 mx-auto mb-2" />
+                      <p className="text-gray-400 text-sm">No schedules configured</p>
+                      <p className="text-gray-500 text-xs mt-1">Click "Add Schedule" to create time-based service blocks</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {schedules.map(schedule => (
+                        <div
+                          key={schedule.id}
+                          className={`p-4 rounded-lg border ${
+                            schedule.currently_active
+                              ? 'bg-purple-900/20 border-purple-500/50'
+                              : schedule.enabled
+                                ? 'bg-gray-700/50 border-gray-600'
+                                : 'bg-gray-800/50 border-gray-700 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-white font-medium">{schedule.name}</h4>
+                                {schedule.currently_active && (
+                                  <span className="px-2 py-0.5 text-xs bg-purple-500/30 text-purple-300 rounded-full flex items-center gap-1">
+                                    <Play size={10} />
+                                    Active
+                                  </span>
+                                )}
+                              </div>
+                              {schedule.description && (
+                                <p className="text-gray-400 text-sm mt-1">{schedule.description}</p>
+                              )}
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-2 text-sm text-gray-400">
+                                <span className="flex items-center gap-1">
+                                  <Clock size={14} />
+                                  {schedule.start_time} - {schedule.end_time}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <Calendar size={14} />
+                                  {schedule.days_of_week.map(d => getDayName(d, true)).join(', ')}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-2">
+                                {schedule.services.slice(0, 5).map(service => (
+                                  <span key={service} className="px-2 py-0.5 text-xs bg-gray-600 text-gray-300 rounded">
+                                    {availableServices.find(s => s.id === service)?.name || service}
+                                  </span>
+                                ))}
+                                {schedule.services.length > 5 && (
+                                  <span className="px-2 py-0.5 text-xs bg-gray-600 text-gray-400 rounded">
+                                    +{schedule.services.length - 5} more
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 ml-4">
+                              <button
+                                onClick={() => handleUpdateSchedule(schedule.id, { enabled: !schedule.enabled })}
+                                disabled={schedulesLoading}
+                                className={`p-1.5 rounded transition-colors ${
+                                  schedule.enabled
+                                    ? 'text-green-400 hover:bg-green-400/20'
+                                    : 'text-gray-500 hover:bg-gray-600'
+                                }`}
+                                title={schedule.enabled ? 'Disable' : 'Enable'}
+                              >
+                                {schedule.enabled ? <Play size={16} /> : <Pause size={16} />}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingSchedule(schedule)
+                                  setNewSchedule({
+                                    name: schedule.name,
+                                    description: schedule.description || '',
+                                    services: schedule.services,
+                                    days_of_week: schedule.days_of_week,
+                                    start_time: schedule.start_time,
+                                    end_time: schedule.end_time,
+                                    timezone: schedule.timezone,
+                                    enabled: schedule.enabled,
+                                  })
+                                  setShowScheduleModal(true)
+                                }}
+                                className="p-1.5 text-gray-400 hover:text-cyan-400 hover:bg-cyan-400/20 rounded transition-colors"
+                                title="Edit"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSchedule(schedule.id)}
+                                disabled={schedulesLoading}
+                                className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-400/20 rounded transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Info Card */}
+                <div className="magnetic-card p-4 border-l-4 border-cyan-500">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle size={20} className="text-cyan-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-white font-medium">Per-Client Overrides</h4>
+                      <p className="text-gray-400 text-sm mt-1">
+                        Individual clients can have custom settings that override these global defaults.
+                        Go to the <button onClick={() => setActiveTab('clients')} className="text-cyan-400 hover:underline">Clients</button> tab to configure per-device settings.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="magnetic-card p-8 text-center">
+                <RefreshCw size={24} className="text-gray-500 animate-spin mx-auto mb-4" />
+                <p className="text-gray-400">Loading settings...</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Schedule Modal */}
+        {showScheduleModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="magnetic-card p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-white font-medium text-lg">
+                  {editingSchedule ? 'Edit Schedule' : 'Create Schedule'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowScheduleModal(false)
+                    setEditingSchedule(null)
+                    resetScheduleForm()
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* Name */}
+                <div>
+                  <label className="text-gray-300 text-sm mb-1 block">Schedule Name *</label>
+                  <input
+                    type="text"
+                    value={newSchedule.name}
+                    onChange={(e) => setNewSchedule(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g., School Hours, Bedtime"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:border-magnetic-primary focus:outline-none"
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="text-gray-300 text-sm mb-1 block">Description</label>
+                  <input
+                    type="text"
+                    value={newSchedule.description}
+                    onChange={(e) => setNewSchedule(prev => ({ ...prev, description: e.target.value }))}
+                    placeholder="Optional description"
+                    className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:border-magnetic-primary focus:outline-none"
+                  />
+                </div>
+
+                {/* Time Range */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-gray-300 text-sm mb-1 block">Start Time *</label>
+                    <input
+                      type="time"
+                      value={newSchedule.start_time}
+                      onChange={(e) => setNewSchedule(prev => ({ ...prev, start_time: e.target.value }))}
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:border-magnetic-primary focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-300 text-sm mb-1 block">End Time *</label>
+                    <input
+                      type="time"
+                      value={newSchedule.end_time}
+                      onChange={(e) => setNewSchedule(prev => ({ ...prev, end_time: e.target.value }))}
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:border-magnetic-primary focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Days of Week */}
+                <div>
+                  <label className="text-gray-300 text-sm mb-2 block">Days *</label>
+                  <div className="flex flex-wrap gap-2">
+                    {[0, 1, 2, 3, 4, 5, 6].map(day => (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => {
+                          setNewSchedule(prev => ({
+                            ...prev,
+                            days_of_week: prev.days_of_week.includes(day)
+                              ? prev.days_of_week.filter(d => d !== day)
+                              : [...prev.days_of_week, day].sort()
+                          }))
+                        }}
+                        className={`px-3 py-1.5 rounded text-sm transition-colors ${
+                          newSchedule.days_of_week.includes(day)
+                            ? 'bg-purple-500 text-white'
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        }`}
+                      >
+                        {getDayName(day, true)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setNewSchedule(prev => ({ ...prev, days_of_week: [0, 1, 2, 3, 4] }))}
+                      className="text-xs text-cyan-400 hover:underline"
+                    >
+                      Weekdays
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewSchedule(prev => ({ ...prev, days_of_week: [5, 6] }))}
+                      className="text-xs text-cyan-400 hover:underline"
+                    >
+                      Weekends
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setNewSchedule(prev => ({ ...prev, days_of_week: [0, 1, 2, 3, 4, 5, 6] }))}
+                      className="text-xs text-cyan-400 hover:underline"
+                    >
+                      Every day
+                    </button>
+                  </div>
+                </div>
+
+                {/* Services to Block */}
+                <div>
+                  <label className="text-gray-300 text-sm mb-2 block">Services to Block *</label>
+
+                  {/* Category Quick Toggles */}
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {Object.entries(SERVICE_CATEGORIES).map(([key, category]) => {
+                      const allSelected = category.services.every(s => newSchedule.services.includes(s))
+                      const someSelected = category.services.some(s => newSchedule.services.includes(s))
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            if (allSelected) {
+                              setNewSchedule(prev => ({
+                                ...prev,
+                                services: prev.services.filter(s => !category.services.includes(s))
+                              }))
+                            } else {
+                              setNewSchedule(prev => ({
+                                ...prev,
+                                services: [...new Set([...prev.services, ...category.services])]
+                              }))
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-1.5 ${
+                            allSelected
+                              ? 'bg-purple-500 text-white'
+                              : someSelected
+                                ? 'bg-purple-500/50 text-purple-200'
+                                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                          }`}
+                        >
+                          <span>{category.icon}</span>
+                          <span>{category.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Individual Services */}
+                  <div className="max-h-48 overflow-y-auto border border-gray-600 rounded p-2 bg-gray-800/50">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
+                      {availableServices.map(service => (
+                        <label
+                          key={service.id}
+                          className="flex items-center gap-2 p-1.5 rounded hover:bg-gray-700 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={newSchedule.services.includes(service.id)}
+                            onChange={() => {
+                              setNewSchedule(prev => ({
+                                ...prev,
+                                services: prev.services.includes(service.id)
+                                  ? prev.services.filter(s => s !== service.id)
+                                  : [...prev.services, service.id]
+                              }))
+                            }}
+                            className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-purple-500"
+                          />
+                          <span className="text-gray-300 text-sm truncate">{service.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-gray-500 text-xs mt-1">
+                    {newSchedule.services.length} service{newSchedule.services.length !== 1 ? 's' : ''} selected
+                  </p>
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-700">
+                  <button
+                    onClick={() => {
+                      setShowScheduleModal(false)
+                      setEditingSchedule(null)
+                      resetScheduleForm()
+                    }}
+                    className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (editingSchedule) {
+                        await handleUpdateSchedule(editingSchedule.id, newSchedule)
+                        setShowScheduleModal(false)
+                        setEditingSchedule(null)
+                        resetScheduleForm()
+                      } else {
+                        await handleCreateSchedule()
+                      }
+                    }}
+                    disabled={!newSchedule.name || newSchedule.services.length === 0 || newSchedule.days_of_week.length === 0 || schedulesLoading}
+                    className="magnetic-button-primary px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {schedulesLoading ? (
+                      <span className="flex items-center gap-2">
+                        <RefreshCw size={14} className="animate-spin" />
+                        Saving...
+                      </span>
+                    ) : editingSchedule ? 'Update Schedule' : 'Create Schedule'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'chat' && (
           <div className="magnetic-card p-4 h-[600px]">
             <ChatPanel
@@ -2085,6 +3503,25 @@ export default function DNS() {
           </div>
         )}
       </div>
+
+      {/* Investigation Modal */}
+      <InvestigationPreviewModal
+        isOpen={showInvestigationModal}
+        onClose={() => {
+          setShowInvestigationModal(false)
+          setInvestigateAlert(null)
+        }}
+        alert={investigateAlert}
+        alertType="dns"
+        clientLookup={clientLookup}
+      />
+
+      {/* Domain Analysis Modal */}
+      <DomainAnalysisModal
+        isOpen={!!analyzeDomain}
+        onClose={() => setAnalyzeDomain(null)}
+        domain={analyzeDomain}
+      />
     </div>
   )
 }
